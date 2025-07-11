@@ -1,6 +1,6 @@
 import torch
 import torch.nn.utils.prune as prune
-from model import NtCNN
+from model import LiteNet
 import numpy as np
 from data_processing import preprocess_data
 import time
@@ -49,8 +49,8 @@ config = {
     'num_class': 10,
     'data': data,
     'num_features': 20,
-    'model_path': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model.pth",
-    'model_path_pruned': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model_pruned.pth",
+    'model_path': f"saved_dict/LiteNet_{data}_{num_features}Features_best_model.pth",
+    'model_path_pruned': f"saved_dict/LiteNet_{data}_{num_features}Features_best_model_pruned.pth",
     'output_path': 'global_relevance.pth'
 }
 
@@ -247,7 +247,7 @@ del train, test, val, most_important_list
 gc.collect()
 
 # Initialize model
-model = NtCNN(sequence=config['sequence'], 
+model = LiteNet(sequence=config['sequence'], 
                 features=config['features'], 
                 num_class=config['num_class']).to(device)
 

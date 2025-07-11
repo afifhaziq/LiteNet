@@ -5,8 +5,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset # For creating dummy loaders if needed
 import numpy as np
-# Assuming model.py contains NtCNN
-from model import NtCNN
+# Assuming model.py contains LiteNet
+from model import LiteNet
 # Assuming data_processing.py contains preprocess_data
 from data_processing import preprocess_data
 # Assuming train.py contains get_time (or define it here if not available)
@@ -60,8 +60,8 @@ config = {
     'num_class': 10,
     'data': data,
     'num_features': 20,
-    'model_path': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model.pth", # Path to your *original* pre-trained model
-    'model_path_pruned': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model_pruned_finetuned.pth", # Path for the *final* pruned and fine-tuned model
+    'model_path': f"saved_dict/LiteNet_{data}_{num_features}Features_best_model.pth", # Path to your *original* pre-trained model
+    'model_path_pruned': f"saved_dict/LiteNet_{data}_{num_features}Features_best_model_pruned_finetuned.pth", # Path for the *final* pruned and fine-tuned model
     'output_path': 'global_relevance.pth', # Not directly used in this script's flow
     'fine_tune_epochs': args.fine_tune_epochs,
     'fine_tune_lr': args.fine_tune_lr
@@ -149,7 +149,7 @@ def fine_tune_model(model, train_loader, val_loader, device, num_epochs, learnin
 
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     criterion = torch.nn.CrossEntropyLoss()
-
+    wandb.watch(model, log='all')
     best_val_accuracy = -1.0
     
     for epoch in range(num_epochs):
@@ -301,7 +301,7 @@ if __name__ == '__main__':
     gc.collect() # Free up memory
 
     # Initialize model
-    model = NtCNN(sequence=config['sequence'], 
+    model = LiteNet(sequence=config['sequence'], 
                   features=config['features'], 
                   num_class=config['num_class']).to(device)
 
@@ -321,9 +321,10 @@ if __name__ == '__main__':
     # --- Final Evaluation of the Fine-Tuned Pruned Model ---
     print(f"\n--- Final Evaluation after Pruning and Fine-Tuning ---")
     # Reload the best fine-tuned model (in case the last epoch wasn't the best)
-    final_model = NtCNN(sequence=config['sequence'], 
+    final_model = LiteNet(sequence=config['sequence'], 
                       features=config['features'], 
                       num_class=config['num_class']).to(device)
+    final_model.load_state_dict(torch.load(config['model_path_pruned']))
     test_model(final_model, test_loader, device, classes, config['data'], config['model_path_pruned'])
 
     # --- Calculate Final Sparsity and FLOPs ---

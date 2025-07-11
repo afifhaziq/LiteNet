@@ -10,7 +10,8 @@ FEATURES = 20
 
 # Dummy input matching the expected shape and type (e.g., float32)
 # Ensure this matches the dummy_input you used for ONNX export
-dummy_input_onnx = np.random.rand(BATCH_SIZE, SEQUENCE_LENGTH, FEATURES).astype(np.float32)
+#dummy_input_onnx = np.random.rand(BATCH_SIZE, SEQUENCE_LENGTH, FEATURES).astype(np.float32)
+dummy_input_onnx = np.load('dataset/ISCXVPN2016/test.npy')
 
 # Path to your ONNX model file
 onnx_model_path = 'saved_dict/NtCNN_ISCXVPN2016_20Features_best_model_pruned_finetuned.onnx' # Make sure this is the correct path to your exported ONNX model

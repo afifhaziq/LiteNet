@@ -7,34 +7,30 @@ import argparse
 import wandb
 from data_processing import preprocess_data, prepare_dataloader
 import gc
+import yaml # <-- Import the YAML library
 
 
-
-
-
-parser = argparse.ArgumentParser(description='Inception Prune and Fine-tune')
+parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
+parser.add_argument('--quantize', type=str, default="fp16", help="fp16 or int8")
 parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
 args = parser.parse_args()
 
-data = args.data
-num_features = 20
+# --- Load Configuration from YAML ---
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
 
-config = {
-    'sequence': 1,
-    'features': 20,
-    'learning_rate': 0.001, # Original training LR (might not be used for fine-tuning directly)
-    'batch_size': 64,
-    'num_class': 10,
-    'data': data,
-    'num_features': 20,
-    'model_path': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model.pth", # Path to your *original* pre-trained model
-    'model_path_pruned': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model_pruned_finetuned.pth", # Path for the *final* pruned and fine-tuned model
-}
+# Add dataset name from args to the config
+config['dataset_name'] = args.data
+
+data = args.data
+num_features = config['selected_features']
+
+
 wandb.init(project="Inception-"+ data + "_prune_finetune_inference", mode="online")
 
 # --- Configuration (Adjust these based on your model and environment) ---
 # Path to your TensorRT engine file
-TRT_ENGINE_PATH = f"/home/afifhaziq/benchmark_ntc/ntc_inception/saved_dict/NtCNN_{data}_fp16_sparse.trt"
+TRT_ENGINE_PATH = f"C:\\Users\\afif\\Documents\\Master\\Code\\ntc_inception\\saved_dict\\LiteNet_{data}_{args.quantize}_sparse.trt"
 
 # Define the expected input and output tensor names from ONNX model
 # get these from ONNX verification step or by inspecting the ONNX graph.
@@ -171,7 +167,7 @@ if __name__ == "__main__":
 
     # --- Dataset Loading and Preprocessing ---
     # This section is largely from your provided code
-    if config['data'] == 'ISCXVPN2016':
+    if config['dataset_name'] == 'ISCXVPN2016':
         classes = ('AIM Chat','Email','Facebook Audio','Facebook Chat','Gmail Chat',
                    'Hangouts Chat','ICQ Chat','Netflix','Spotify','Youtube')
         feature_file = 'top740featuresISCX.npy'
@@ -189,22 +185,22 @@ if __name__ == "__main__":
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
     most_important_list = [x - 1 for x in most_important_list]
-    most_important_list = most_important_list[:config['num_features']]
+    most_important_list = most_important_list[:config['selected_features']]
 
     # Load raw data
     try:
-        train_data_npy = np.load(f"{config['data']}/train.npy", allow_pickle=True)
-        test_data_npy = np.load(f"{config['data']}/test.npy", allow_pickle=True)
-        val_data_npy = np.load(f"{config['data']}/val.npy", allow_pickle=True)
+        train_data_npy = np.load(f"dataset/{config['dataset_name']}/train.npy", allow_pickle=True)
+        test_data_npy = np.load(f"dataset/{config['dataset_name']}/test.npy", allow_pickle=True)
+        val_data_npy = np.load(f"dataset/{config['dataset_name']}/val.npy", allow_pickle=True)
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}. Please ensure data files are in '{config['data']}/' directory.")
+        print(f"Error loading data: {e}. Please ensure data files are in '{config['dataset_name']}/' directory.")
         exit()
         
     # Preprocess data to get DataLoaders
     # IMPORTANT: Ensure prepare_dataloader is correctly imported and returns what's expected
     train_loader, test_loader, val_loader, pretime, avgpretime = preprocess_data(
         train_data_npy, test_data_npy, val_data_npy, most_important_list,
-        config['batch_size'], config['data']
+        config['batch_size'], config['dataset_name']
     )
     
     wandb.log({"preprocess_time": float(pretime)})

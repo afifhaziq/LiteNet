@@ -1,0 +1,30 @@
+# Main configuration for the training pipeline
+batch_size: 64
+epochs: 60
+learning_rate: 0.001
+num_class: 10
+test_mode: false
+
+# For feature_selection.py (full model training)
+num_features: 740
+
+# For main.py (training on selected features)
+sequence: 1
+selected_features: 20
+
+# Settings
+num_class: 10
+classes: [
+    "AIM Chat",
+    "Email",
+    "Facebook Audio",
+    "Facebook Chat",
+    "Gmail Chat",
+    "Hangouts Chat",
+    "ICQ Chat",
+    "Netflix",
+    "Spotify",
+    "Youtube",
+  ] # Default classes
+artifacts_dir: artifacts
+

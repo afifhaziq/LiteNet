@@ -5,7 +5,7 @@ from datetime import timedelta
 import wandb
 
 
-def train_model(model, train_loader, val_loader, device, criterion, optimizer, num_epoch, num_features, data, lr):
+def train_model(model, train_loader, val_loader, device, criterion, optimizer, scheduler, num_epoch, model_path):
     
 
     best_val_loss = float('inf')
@@ -29,16 +29,24 @@ def train_model(model, train_loader, val_loader, device, criterion, optimizer, n
 
         train_loss /= len(train_loader)
 
-        val_loss = evaluate_model(model, val_loader, device, criterion)
+        val_loss, _, _ = evaluate_model(model, val_loader, device, criterion)
         
-        wandb.log({"Train Loss": train_loss, "Val Loss": val_loss})
+        # Step the scheduler with the validation loss
+        scheduler.step(val_loss)
+
+        # Log metrics to wandb
+        wandb.log({
+            "Train Loss": train_loss, 
+            "Val Loss": val_loss,
+            "Learning Rate": optimizer.param_groups[0]['lr']
+        })
         print(f"Epoch {epoch+1}/{num_epoch}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
         
         # Save the model if validation loss improves
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            torch.save(model.state_dict(), 'saved_dict/' + type(model).__name__ +'_'+ data +'_'+ num_features+ "Features_best_model.pth")
-            print("Model saved!")
+            torch.save(model.state_dict(), model_path)
+            print(f"Model saved to {model_path}")
 
     end_time = time.perf_counter()
     time_dif = end_time - start_time
@@ -50,17 +58,31 @@ def train_model(model, train_loader, val_loader, device, criterion, optimizer, n
     wandb.log({"average_training_time":  float(average_time)})
     return model
 
-def evaluate_model(model, dataloader, device, criterion):
-    """Evaluates the model on validation/test data."""
+def evaluate_model(model, dataloader, device, criterion=None):
+    """
+    Evaluates the model on a given dataloader.
+    Can compute loss and/or return predictions and labels.
+    """
     model.eval()
-    val_loss = 0
+    total_loss = 0
+    all_preds, all_labels = [], []
     with torch.inference_mode():
         for samples, labels in dataloader:
-            samples, labels = samples.to(device), labels.to(device)
+            samples = samples.to(device).float()
+            labels = labels.to(device)
+
             predictions = model(samples)
-            loss = criterion(predictions, labels)
-            val_loss += loss.item()
-    return val_loss / len(dataloader)
+
+            if criterion:
+                loss = criterion(predictions, labels.long())
+                total_loss += loss.item()
+
+            preds = torch.argmax(predictions, dim=1)
+            all_preds.extend(preds.cpu().numpy())
+            all_labels.extend(labels.cpu().numpy())
+
+    avg_loss = total_loss / len(dataloader) if criterion and len(dataloader) > 0 else 0
+    return avg_loss, all_preds, all_labels
 
 def get_time(start_time, test = 5, data=None):
     end_time = time.perf_counter()

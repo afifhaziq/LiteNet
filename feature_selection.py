@@ -6,7 +6,7 @@ import argparse
 import os
 import gc
 from data_processing import preprocess_data
-from model import LiteNet
+from model import LiteNet, LiteNetLarge
 from train import train_model
 import wandb
 import re
@@ -28,7 +28,7 @@ def train_full_model(config):
     wandb.init(project=project_name, tags=[str(num_features)], mode="disabled")
     # --- Initialize Model ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LiteNet(sequence=37, features=20, num_class=config.get('num_class', 10)).to(device)
+    model = LiteNetLarge(sequence=37, features=20, num_class=config.get('num_class', 10)).to(device)
     model_path = f"saved_dict/LiteNet_{dataset_name}_large.pth"
 
     # --- Load Data and Train ---

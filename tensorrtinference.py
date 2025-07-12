@@ -7,11 +7,11 @@ import argparse
 import wandb
 from data_processing import preprocess_data, prepare_dataloader
 import gc
-import yaml # <-- Import the YAML library
+import yaml 
 
 
 parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
-parser.add_argument('--quantize', type=str, default="fp16", help="fp16 or int8")
+parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
 parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
 args = parser.parse_args()
 
@@ -23,29 +23,37 @@ with open('config.yaml', 'r') as f:
 config['dataset_name'] = args.data
 
 data = args.data
-num_features = config['selected_features']
+quant = args.quantization 
 
+num_features = config['features']
 
-wandb.init(project="Inception-"+ data + "_prune_finetune_inference", mode="online")
+print("TensorRT version:", trt.__version__)
+wandb.init(project="LiteNet-"+ data + "inference", mode="disabled")
 
 # --- Configuration (Adjust these based on your model and environment) ---
 # Path to your TensorRT engine file
-TRT_ENGINE_PATH = f"C:\\Users\\afif\\Documents\\Master\\Code\\ntc_inception\\saved_dict\\LiteNet_{data}_{args.quantize}_sparse.trt"
+# The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
+TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
 
 # Define the expected input and output tensor names from ONNX model
-# get these from ONNX verification step or by inspecting the ONNX graph.
 INPUT_NAME = "input"  # As used in trtexec --shapes=...
 OUTPUT_NAME = "output" # ONNX model's last layer
 
 # Define the fixed input and output shapes/types used when building the engine
-
 INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
 OUTPUT_SHAPE = (config["batch_size"], config["num_class"]) # Adjust based on your model's actual output shape
 NUM_INFERENCE_RUNS = 1000
 WARMUP_RUNS = 100
-# TensorRT engine was built with FP16 precision
-INPUT_DTYPE = np.float16
-OUTPUT_DTYPE = np.float16 # Output will also be in FP16
+# TensorRT engine was built with FP16 or INT8 precision
+if quant == "fp16":
+    INPUT_DTYPE = np.float16
+    OUTPUT_DTYPE = np.float16
+elif quant == "int8":
+    INPUT_DTYPE = np.float32  # INT8 engines often take float32 input for calibration, but check your engine
+    OUTPUT_DTYPE = np.float32
+else:
+    INPUT_DTYPE = np.float32
+    OUTPUT_DTYPE = np.float32
 
 
 
@@ -161,37 +169,27 @@ if __name__ == "__main__":
     print(f"Loading TensorRT Engine from: {TRT_ENGINE_PATH}...")
     with open(TRT_ENGINE_PATH, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         engine = runtime.deserialize_cuda_engine(f.read())
-    print("Engine loaded successfully.")
+        print("Engine loaded successfully.")
 
     context = engine.create_execution_context()
 
     # --- Dataset Loading and Preprocessing ---
-    # This section is largely from your provided code
-    if config['dataset_name'] == 'ISCXVPN2016':
-        classes = ('AIM Chat','Email','Facebook Audio','Facebook Chat','Gmail Chat',
-                   'Hangouts Chat','ICQ Chat','Netflix','Spotify','Youtube')
-        feature_file = 'top740featuresISCX.npy'
-    else:
-        classes = ('Bittorent', 'ChromeRDP', 'Discord', 'EAOrigin', 'MicrosoftTeams',
-                   'Slack', 'Steam', 'Teamviewer', 'Webex', 'Zoom')
-        feature_file = 'top740featuresMALAYAGT.npy'
+    # Fetch classes and feature file from config.yaml
+    classes = config.get('classes', [])
+    feature_file = config.get('feature_file')
 
     # Load features
-    # Ensure this path is correct relative to where you run the script, or absolute
-   
     try:
         most_important_list = np.load(feature_file)
     except FileNotFoundError:
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
-    most_important_list = [x - 1 for x in most_important_list]
-    most_important_list = most_important_list[:config['selected_features']]
 
     # Load raw data
     try:
-        train_data_npy = np.load(f"dataset/{config['dataset_name']}/train.npy", allow_pickle=True)
-        test_data_npy = np.load(f"dataset/{config['dataset_name']}/test.npy", allow_pickle=True)
-        val_data_npy = np.load(f"dataset/{config['dataset_name']}/val.npy", allow_pickle=True)
+        train_data_npy = np.load(f"dataset/{config['dataset_name']}/train.npy")
+        test_data_npy = np.load(f"dataset/{config['dataset_name']}/test.npy")
+        val_data_npy = np.load(f"dataset/{config['dataset_name']}/val.npy")
     except FileNotFoundError as e:
         print(f"Error loading data: {e}. Please ensure data files are in '{config['dataset_name']}/' directory.")
         exit()

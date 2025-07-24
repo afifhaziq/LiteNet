@@ -7,49 +7,64 @@ import argparse
 import wandb
 from data_processing import preprocess_data, prepare_dataloader
 import gc
+import yaml 
+from main import get_dataset_info
+import random
+import torch
 
-
-
-
-
-parser = argparse.ArgumentParser(description='Inception Prune and Fine-tune')
+'''def seed_everything(seed: int) -> None:
+    """Sets the seed for reproducibility."""
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False'''
+    
+parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
+parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
 parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
 args = parser.parse_args()
 
+# --- Load Configuration from YAML ---
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
+
+# Add dataset name from args to the config
+config['dataset_name'] = args.data
+
 data = args.data
-num_features = 20
+quant = args.quantization 
 
-config = {
-    'sequence': 1,
-    'features': 20,
-    'learning_rate': 0.001, # Original training LR (might not be used for fine-tuning directly)
-    'batch_size': 64,
-    'num_class': 10,
-    'data': data,
-    'num_features': 20,
-    'model_path': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model.pth", # Path to your *original* pre-trained model
-    'model_path_pruned': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model_pruned_finetuned.pth", # Path for the *final* pruned and fine-tuned model
-}
-wandb.init(project="Inception-"+ data + "_prune_finetune_inference", mode="online")
+num_features = config['features']
 
+print("TensorRT version:", trt.__version__)
+wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
+#seed_everything(134)
 # --- Configuration (Adjust these based on your model and environment) ---
 # Path to your TensorRT engine file
-TRT_ENGINE_PATH = f"/home/afifhaziq/benchmark_ntc/ntc_inception/saved_dict/NtCNN_{data}_fp16_sparse.trt"
+# The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
+TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
 
 # Define the expected input and output tensor names from ONNX model
-# get these from ONNX verification step or by inspecting the ONNX graph.
 INPUT_NAME = "input"  # As used in trtexec --shapes=...
 OUTPUT_NAME = "output" # ONNX model's last layer
 
 # Define the fixed input and output shapes/types used when building the engine
-
 INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
 OUTPUT_SHAPE = (config["batch_size"], config["num_class"]) # Adjust based on your model's actual output shape
 NUM_INFERENCE_RUNS = 1000
 WARMUP_RUNS = 100
-# TensorRT engine was built with FP16 precision
-INPUT_DTYPE = np.float16
-OUTPUT_DTYPE = np.float16 # Output will also be in FP16
+# TensorRT engine was built with FP16 or INT8 precision
+if quant == "fp16":
+    INPUT_DTYPE = np.float16
+    OUTPUT_DTYPE = np.float16
+elif quant == "int8":
+    INPUT_DTYPE = np.float32  # INT8 engines often take float32 input for calibration, but check your engine
+    OUTPUT_DTYPE = np.float32
+else:
+    INPUT_DTYPE = np.float32
+    OUTPUT_DTYPE = np.float32
 
 
 
@@ -165,46 +180,37 @@ if __name__ == "__main__":
     print(f"Loading TensorRT Engine from: {TRT_ENGINE_PATH}...")
     with open(TRT_ENGINE_PATH, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         engine = runtime.deserialize_cuda_engine(f.read())
-    print("Engine loaded successfully.")
+        print("Engine loaded successfully.")
 
     context = engine.create_execution_context()
 
     # --- Dataset Loading and Preprocessing ---
-    # This section is largely from your provided code
-    if config['data'] == 'ISCXVPN2016':
-        classes = ('AIM Chat','Email','Facebook Audio','Facebook Chat','Gmail Chat',
-                   'Hangouts Chat','ICQ Chat','Netflix','Spotify','Youtube')
-        feature_file = 'top740featuresISCX.npy'
-    else:
-        classes = ('Bittorent', 'ChromeRDP', 'Discord', 'EAOrigin', 'MicrosoftTeams',
-                   'Slack', 'Steam', 'Teamviewer', 'Webex', 'Zoom')
-        feature_file = 'top740featuresMALAYAGT.npy'
-
+    # Fetch classes and feature file from config.yaml
+    classes, num_class, feature_file = get_dataset_info(config, args.data)
     # Load features
-    # Ensure this path is correct relative to where you run the script, or absolute
-   
     try:
         most_important_list = np.load(feature_file)
     except FileNotFoundError:
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
-    most_important_list = [x - 1 for x in most_important_list]
-    most_important_list = most_important_list[:config['num_features']]
+
+    
+
 
     # Load raw data
     try:
-        train_data_npy = np.load(f"{config['data']}/train.npy", allow_pickle=True)
-        test_data_npy = np.load(f"{config['data']}/test.npy", allow_pickle=True)
-        val_data_npy = np.load(f"{config['data']}/val.npy", allow_pickle=True)
+        train_data_npy = np.load(f"dataset/{config['dataset_name']}/train.npy")
+        test_data_npy = np.load(f"dataset/{config['dataset_name']}/test.npy")
+        val_data_npy = np.load(f"dataset/{config['dataset_name']}/val.npy")
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}. Please ensure data files are in '{config['data']}/' directory.")
+        print(f"Error loading data: {e}. Please ensure data files are in '{config['dataset_name']}/' directory.")
         exit()
         
     # Preprocess data to get DataLoaders
     # IMPORTANT: Ensure prepare_dataloader is correctly imported and returns what's expected
     train_loader, test_loader, val_loader, pretime, avgpretime = preprocess_data(
         train_data_npy, test_data_npy, val_data_npy, most_important_list,
-        config['batch_size'], config['data']
+        config['batch_size'], config['dataset_name']
     )
     
     wandb.log({"preprocess_time": float(pretime)})
@@ -305,22 +311,26 @@ if __name__ == "__main__":
 
     avg_inferencetime = (total_inference_time_s / total_samples_processed) if num_processed_batches > 0 else 0
     throughput_qps = total_samples_processed / total_inference_time_s if total_inference_time_s > 0 else 0
-
+    throughput = 0.012/(float(avgpretime) + avg_inferencetime)
     print("\n--- Inference Summary ---")
     print(f"Total batches processed: {num_processed_batches}")
     print(f"Total samples processed: {total_samples_processed}")
     print(f"Total inference time: {total_inference_time_s:.4f} seconds")
     print(f"Average inference time per sample: {avg_inferencetime} s")
-    print(f"Overall Throughput: {throughput_qps:.2f} qps (queries per second)")
-
+    print(f"Throughput: {throughput_qps:.2f} qps (queries per second)")
+    print(f"Throughput (Mbps): {throughput:.2f} Mbps")
     # Optional: Calculate overall accuracy
-    from sklearn.metrics import accuracy_score
+    from sklearn.metrics import accuracy_score, classification_report
+
+    print('--- Classification Report ---')
+    print(classification_report(all_true_labels, all_predictions, target_names=classes, digits=4))
     if len(all_predictions) > 0:
         accuracy = accuracy_score(all_true_labels, all_predictions)
         print(f"Overall Accuracy on Test Set: {accuracy * 100:.2f}%")
         wandb.log({"test_accuracy_trt": accuracy})
         wandb.log({"trt_inferencetime_s": avg_inferencetime})
         wandb.log({"trt_throughput_qps": throughput_qps})
+        wandb.log({"Throughput_mbps": throughput})
     else:
         print("No batches processed for accuracy calculation.")
 

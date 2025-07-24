@@ -24,6 +24,7 @@ class LiteNet(nn.Module):
         self.features = features
 
         print(f"Initializing LiteNet with sequence={sequence}, features={features}")
+
         # 1x1 convolution branch
         self.branch1x1 = nn.Sequential(
             nn.Conv1d(sequence, 16, kernel_size=1),
@@ -53,7 +54,7 @@ class LiteNet(nn.Module):
 
         self.global_pool = nn.AvgPool1d(kernel_size=5, stride=5)
         self.fc1 = nn.Linear(256, 128)
-        self.activation5 = nn.LeakyReLU()
+        self.activation5 = nn.ReLU()
         self.fc2 = nn.Linear(128, 64)
         self.activation6 = nn.ReLU()
         self.fc3 = nn.Linear(64, num_class)
@@ -61,7 +62,7 @@ class LiteNet(nn.Module):
     def forward(self, x):
         #print(f"Input shape at epoch start: {x.shape}")
         x = x.view(-1, self.sequence, self.features)  # Reshape input
-
+        print(f"Input shape at epoch start: {x.shape}")
         branch1x1 = self.branch1x1(x)
         branch3x3 = self.branch3x3(x)
         branch5x5 = self.branch5x5(x)
@@ -75,7 +76,7 @@ class LiteNet(nn.Module):
         fc2_out = self.activation6(self.fc2(fc1_out))
         x = self.fc3(fc2_out)
 
-        
+        l
         return x
 
 

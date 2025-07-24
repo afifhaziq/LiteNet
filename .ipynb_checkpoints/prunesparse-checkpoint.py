@@ -1,28 +1,26 @@
 import torch
-import torch.nn as nn # Added for clarity with Linear and Conv1d types
+import torch.nn as nn
 import torch.nn.utils.prune as prune
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset # For creating dummy loaders if needed
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-# Assuming model.py contains NtCNN
-from model import NtCNN
-# Assuming data_processing.py contains preprocess_data
+from model import LiteNet, QuantizedLiteNet
 from data_processing import preprocess_data
-# Assuming train.py contains get_time (or define it here if not available)
-# Defining get_time here for completeness if train.py is not strictly available for this script
-from train import get_time
-
+from train import get_time, evaluate_model, train_model, test_and_report
 import time
 import wandb
 from sklearn.metrics import classification_report, confusion_matrix
-import matplotlib.pyplot as plt # Not directly used in the final script but often good for visualization
 import random
 import argparse
 import copy
+import yaml
 from sklearn import metrics
 from ptflops import get_model_complexity_info
 import gc
+import torch.ao.quantization
+from tqdm import tqdm
+from quantize import quantize_fp16, quantize_int8_static
 
 # --- 1. Utility Functions ---
 
@@ -35,55 +33,56 @@ def seed_everything(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-seed_everything(134)
-
 # --- 2. Argparser and Config ---
-
-parser = argparse.ArgumentParser(description='Inception Prune and Fine-tune')
-parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
-parser.add_argument('--fine_tune_epochs', type=int, default=30, help='Number of epochs for fine-tuning after pruning')
-parser.add_argument('--fine_tune_lr', type=float, default=0.0001, help='Learning rate for fine-tuning')
-
+parser = argparse.ArgumentParser(description='LiteNet Pruning, Fine-tuning, and Quantization')
+parser.add_argument('--data', type=str, help='(Optional) Override the active_dataset from config.yaml.')
+parser.add_argument('--quantization', type=str, default='None', choices=['None', 'FP16', 'INT8'], help='Type of quantization to apply after fine-tuning. INT8 is only supported for CPU.')
+parser.add_argument('--quantize-only', action='store_true', help='Skip pruning and fine-tuning, and load a pre-existing fine-tuned model for quantization.')
 args = parser.parse_args()
 
-# First calculate the derived values
-sequence = 1
-features = 20
-data = args.data
-num_features = sequence * features # This should be 20 based on your model's input
+# --- Load Base Config from YAML ---
+with open('config.yaml', 'r') as f:
+    config = yaml.safe_load(f)
 
-config = {
-    'sequence': 1,
-    'features': 20,
-    'learning_rate': 0.001, # Original training LR (might not be used for fine-tuning directly)
-    'batch_size': 64,
-    'num_class': 10,
-    'data': data,
-    'num_features': 20,
-    'model_path': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model.pth", # Path to your *original* pre-trained model
-    'model_path_pruned': f"saved_dict/NtCNN_{data}_{num_features}Features_best_model_pruned_finetuned.pth", # Path for the *final* pruned and fine-tuned model
-    'output_path': 'global_relevance.pth', # Not directly used in this script's flow
-    'fine_tune_epochs': args.fine_tune_epochs,
-    'fine_tune_lr': args.fine_tune_lr
-}
+# --- Override/Set Config with CLI Args ---
+dataset_name = args.data if args.data else config['active_dataset']
+config['dataset_name'] = dataset_name # Keep track of the active dataset
+config['quantization'] = args.quantization
+
+# --- Get Dataset-Specific Settings ---
+try:
+    dataset_config = config['datasets'][dataset_name]
+    config.update(dataset_config) # Merge dataset-specific settings into main config
+except KeyError:
+    print(f"Error: Dataset '{dataset_name}' not found in config.yaml under the 'datasets' key.")
+    exit()
+
+# --- Set derived config values ---
+#sequence = config['sequence']
+#features = config['features']
+#num_features = sequence * features
+
+# Corrected path for loading the original model, matching the files in saved_dict
+config['model_path'] = f"saved_dict/LiteNet_{dataset_name}.pth" 
+
+# Use a more descriptive base name for the output files this script generates
+base_output_name = f"LiteNet_{dataset_name}"
+config['model_path_pruned_finetuned'] = f"saved_dict/{base_output_name}_pruned_finetuned.pth"
 
 # --- 3. WANDB Initialization ---
-
-# Note: The 'amount' tag is now less meaningful for 2:4 sparsity, but keeping it
-# if you want to track different experimental runs in WandB.
-wandb.init(project="Inception-"+ data + "_prune_finetune", mode="online", tags=["2:4_Linear"], group='FineTune')
-wandb.config.update({
-    "learning_rate_initial": config['learning_rate'],
-    "batch_size": config['batch_size'],
-    "fine_tune_epochs": config['fine_tune_epochs'],
-    "fine_tune_lr": config['fine_tune_lr'],
-    "prune_type": "2:4_Linear", # Explicitly state pruning type
-})
+seed_everything(config['seed'])
+wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="offline", tags=[f"2:4_Linear_{config['quantization']}"], group='PruneQuant')
+wandb.config.update(config)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"--- Configuration ---")
+for key, value in config.items():
+    if key != 'datasets': # Don't print the whole datasets dict
+        print(f"  {key}: {value}")
 print(f"Using device: {device}")
+print("-" * 21)
 
-# --- 4. 2:4 Sparsity Function ---
+# --- 4. Sparsity and Pruning Functions ---
 
 def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -120,7 +119,6 @@ def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
 
     return pruned_flat_tensor.view(original_shape)
 
-# --- 5. Pruning Function (Linear Layers Only) ---
 
 def prune_model(model):
     print("\n--- Applying 2:4 sparsity only to Linear layers ---")
@@ -142,107 +140,6 @@ def prune_model(model):
     print("--- Model pruning complete ---")
     return model
 
-# --- 6. Fine-Tuning Function ---
-
-def fine_tune_model(model, train_loader, val_loader, device, num_epochs, learning_rate, model_save_path):
-    print(f"\n--- Starting Fine-Tuning for {num_epochs} epochs with LR: {learning_rate} ---")
-
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    criterion = torch.nn.CrossEntropyLoss()
-
-    best_val_accuracy = -1.0
-    
-    for epoch in range(num_epochs):
-        model.train() # Set model to training mode
-        running_loss = 0.0
-        start_time_epoch = time.perf_counter()
-
-        for batch_idx, (images, labels) in enumerate(train_loader):
-            images = images.to(device).float()
-            labels = labels.to(device).long() # Ensure labels are long for CrossEntropyLoss
-
-            optimizer.zero_grad()
-            outputs = model(images)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-
-            running_loss += loss.item()
-        
-        epoch_train_time, _ = get_time(start_time_epoch, test=0)
-        avg_train_loss = running_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{num_epochs} training finished in {epoch_train_time:.2f}s. Avg Train Loss: {avg_train_loss:.4f}")
-        
-        # --- Validation after each epoch ---
-        model.eval() # Set model to evaluation mode
-        val_correct = 0
-        val_total = 0
-        val_loss = 0.0
-        with torch.inference_mode():
-            for images, labels in val_loader:
-                images = images.to(device).float()
-                labels = labels.to(device).long()
-                
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                val_loss += loss.item()
-
-                _, predicted = torch.max(outputs.data, 1)
-                val_total += labels.size(0)
-                val_correct += (predicted == labels).sum().item()
-
-        val_accuracy = 100 * val_correct / val_total
-        avg_val_loss = val_loss / len(val_loader)
-        
-        print(f"Epoch {epoch+1} Validation Accuracy: {val_accuracy:.2f}%, Avg Val Loss: {avg_val_loss:.4f}")
-        wandb.log({"fine_tune_epoch": epoch + 1, "fine_tune_loss": avg_train_loss,
-                   "fine_tune_val_loss": avg_val_loss, "fine_tune_val_accuracy": val_accuracy})
-
-        # Save the best model based on validation accuracy
-        if val_accuracy > best_val_accuracy:
-            best_val_accuracy = val_accuracy
-            torch.save(model.state_dict(), model_save_path)
-            print(f"  Saved best fine-tuned model with accuracy: {best_val_accuracy:.2f}% to {model_save_path}")
-            
-    print("\n--- Fine-Tuning Complete ---")
-    print(f"Best validation accuracy achieved during fine-tuning: {best_val_accuracy:.2f}%")
-
-# --- 7. Testing and Metrics Functions ---
-
-def test_model(model, test_loader, device, classes, data, model_path):
-    print(f"\n--- Starting final test on {model_path} ---")
-    model.load_state_dict(torch.load(model_path)) # Load the fine-tuned model
-    model.eval()
-
-    all_preds, all_labels = [], []
-
-    with torch.inference_mode():
-        start_time = time.perf_counter()    
-        for images, labels in test_loader:
-            images = images.to(device).float()
-            labels = labels.to(device).long() # Ensure labels are long
-
-            predictions = model(images)
-            preds = torch.argmax(predictions, dim=1)
-            
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
-            
-    time_dif, average_time = get_time(start_time, test=1, data=data)
-    print(f"Testing Time usage: {time_dif:.10f} seconds")  
-    print(f"Average Testing time: {average_time:.10f} seconds")
-    
-    acc = metrics.accuracy_score(all_labels, all_preds)
-    print(f"Final Test Accuracy: {acc*100:.2f}%")
-    
-    wandb.log({"final_test_accuracy": acc})
-    wandb.log({"final_test_time": float(time_dif)})
-    wandb.log({"final_average_time_per_batch": float(average_time)})
-
-    print('--- Classification Report ---')
-    print(classification_report(all_labels, all_preds, target_names=classes, digits=4))
-    print('--- Confusion Matrix ---')
-    print(confusion_matrix(all_labels, all_preds))
 
 def count_nonzero_params(model):
     """Count remaining active parameters and total sparsity."""
@@ -253,130 +150,136 @@ def count_nonzero_params(model):
             total += p.numel()
             nonzero += torch.sum(p != 0).item()
     
-    overall_sparsity = (total - nonzero) / total
+    overall_sparsity = (total - nonzero) / total if total > 0 else 0
     print(f"Non-zero params: {nonzero}/{total} ({nonzero/total:.1%})")
     print(f"Overall Model Sparsity: {(overall_sparsity):.1%}")
     return overall_sparsity, nonzero
 
-# --- 8. Main Execution Block ---
+# --- 6. Quantization Functions ---
 
+# --- 7. Main Execution Block ---
 if __name__ == '__main__':
-    # Dataset configuration
-    if config['data'] == 'ISCXVPN2016':
-        classes = ('AIM Chat','Email','Facebook Audio','Facebook Chat','Gmail Chat',
-                    'Hangouts Chat','ICQ Chat','Netflix','Spotify','Youtube')
-        feature_file = 'top740featuresISCX.npy'
-    else:
-        classes = ('Bittorent', 'ChromeRDP', 'Discord', 'EAOrigin', 'MicrosoftTeams',
-                    'Slack', 'Steam', 'Teamviewer', 'Webex', 'Zoom')
-        feature_file = 'top740featuresMALAYAGT.npy'
-
-    # Load features
-    most_important_list = np.load(feature_file)
-    most_important_list = [x - 1 for x in most_important_list]
-    most_important_list = most_important_list[:config['num_features']]
+    # --- Data Loading and Feature Selection (Corrected) ---
+    # This logic now exactly matches main.py
+    feature_list_file = f"top_features_{config['dataset_name']}.npy"
+    print(f"Loading feature list from: {feature_list_file}")
+    most_important_list = np.load(feature_list_file)
+    
+    print(f"Using {len(most_important_list)} pre-selected features.")
 
     # Load raw data
     try:
-        train_data_npy = np.load(f"{config['data']}//train.npy", allow_pickle=True)
-        test_data_npy = np.load(f"{config['data']}//test.npy", allow_pickle=True)
-        val_data_npy = np.load(f"{config['data']}//val.npy", allow_pickle=True)
+        train_data_npy = np.load(f"dataset/{dataset_name}/train.npy")
+        test_data_npy = np.load(f"dataset/{dataset_name}/test.npy")
+        val_data_npy = np.load(f"dataset/{dataset_name}/val.npy")
     except FileNotFoundError as e:
-        print(f"Error loading data: {e}. Please ensure data files are in '{config['data']}/' directory.")
-        exit() # Exit if data not found
+        print(f"Error loading data: {e}. Please ensure files are in 'dataset/{dataset_name}/'.")
+        exit()
         
-    # Preprocess data to get DataLoaders
-    # This call now needs to return train_loader and val_loader too.
-    # Adjust preprocess_data in data_processing.py if it doesn't already return these.
-    # Example signature: preprocess_data(train_data, test_data, val_data, ..., batch_size, ...)
     train_loader, test_loader, val_loader, pretime, avgpretime = preprocess_data(
         train_data_npy, test_data_npy, val_data_npy, most_important_list,
-        config['batch_size'], config['data']
+        config['batch_size'], dataset_name
     )
-    
-    wandb.log({"preprocess_time": float(pretime)})
-    wandb.log({"average_preprocess_time": float(avgpretime)})
+    wandb.log({"preprocess_time": float(pretime), "average_preprocess_time": float(avgpretime)})
+    del train_data_npy, test_data_npy, val_data_npy
+    gc.collect()
 
-    del train_data_npy, test_data_npy, val_data_npy, most_important_list
-    gc.collect() # Free up memory
+    if not args.quantize_only:
+        # --- Step 1: Pruning and Fine-Tuning ---
+        print("\n--- Running in Full Mode: Pruning and Fine-Tuning ---")
+        model = LiteNet(sequence=config['sequence'], features=config['features'], num_class=config['num_class']).to(device)
+        print(f"Loading original pre-trained model from: {config['model_path']}")
+        model.load_state_dict(torch.load(config['model_path']))
 
-    # Initialize model
-    model = NtCNN(sequence=config['sequence'], 
-                  features=config['features'], 
-                  num_class=config['num_class']).to(device)
+        pruned_model = prune_model(copy.deepcopy(model))
+        pruned_model = pruned_model.to(device)
 
-    # Load the original pre-trained model weights
-    print(f"Loading original pre-trained model from: {config['model_path']}")
-    model.load_state_dict(torch.load(config['model_path']))
-
-    # --- Pruning ---
-    pruned_model = prune_model(copy.deepcopy(model)) # Work on a copy of the model for pruning
-    pruned_model = pruned_model.to(device) # Ensure pruned model is on GPU
-
-    # --- Fine-tuning ---
-    # The fine_tune_model function will save the best fine-tuned model to config['model_path_pruned']
-    fine_tune_model(pruned_model, train_loader, val_loader, device,
-                    config['fine_tune_epochs'], config['fine_tune_lr'], config['model_path_pruned'])
-
-    # --- Final Evaluation of the Fine-Tuned Pruned Model ---
-    print(f"\n--- Final Evaluation after Pruning and Fine-Tuning ---")
-    # Reload the best fine-tuned model (in case the last epoch wasn't the best)
-    final_model = NtCNN(sequence=config['sequence'], 
-                      features=config['features'], 
-                      num_class=config['num_class']).to(device)
-    test_model(final_model, test_loader, device, classes, config['data'], config['model_path_pruned'])
-
-    # --- Calculate Final Sparsity and FLOPs ---
-    print("\n--- Final Model Statistics ---")
-    overall_sparsity, total_params = count_nonzero_params(final_model)
-    
-    with torch.cuda.device(0): # Use GPU 0 for FLOPs calculation
-        macs, _ = get_model_complexity_info(
-            final_model, # Use the final, loaded model
-            (config['batch_size'], config['sequence'], config['features']),
-            as_strings=False, 
-            print_per_layer_stat=False,
-            verbose=False
+        # Reusing train_model for fine-tuning
+        print(f"\n--- Starting Fine-Tuning for {config['fine_tune_epochs']} epochs with LR: {config['fine_tune_lr']} ---")
+        optimizer = optim.Adam(pruned_model.parameters(), lr=config['fine_tune_lr'])
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=5)
+        criterion = nn.CrossEntropyLoss()
+        
+        train_model(
+            model=pruned_model, 
+            train_loader=train_loader, 
+            val_loader=val_loader, 
+            device=device,
+            criterion=criterion,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            num_epoch=config['fine_tune_epochs'], 
+            model_path=config['model_path_pruned_finetuned']
         )
+    else:
+        print("\n--- Running in Quantize-Only Mode: Skipping Pruning and Fine-Tuning ---")
 
-    # Note: This is an estimated FLOPs. TensorRT's actual sparse acceleration
-    # on Orin may lead to higher effective speedup.
-    estimated_sparse_flops = 2 * macs * (1 - overall_sparsity) 
-    print(f"Total MACs (estimated dense equivalent): {macs:.2e}")
-    print(f"Estimated Sparse FLOPs (based on overall sparsity): {estimated_sparse_flops:.2e}")
 
-    wandb.log({"total_parameters_final": total_params})
-    wandb.log({"overall_model_sparsity_final": overall_sparsity})
-    wandb.log({"estimated_dense_MACs": macs})
-    wandb.log({"estimated_sparse_FLOPs": estimated_sparse_flops})
-
-    # --- ONNX Export ---
-    print("\n--- Exporting the fine-tuned and pruned model to ONNX ---")
-    onnx_path = config['model_path_pruned'].replace(".pth", ".onnx") # Use .onnx extension
+    # --- Step 2: Load the best fine-tuned model for post-processing ---
+    print(f"\n--- Final Evaluation and Post-Processing ---")
+    final_model_fp32 = LiteNet(sequence=config['sequence'], features=config['features'], num_class=config['num_class']).to(device)
+    print(f"Loading best fine-tuned model from: {config['model_path_pruned_finetuned']}")
+    final_model_fp32.load_state_dict(torch.load(config['model_path_pruned_finetuned']))
     
-    # Create a dummy input matching your model's expected input shape
-    # Example: (batch_size, sequence, features)
-    dummy_input = torch.randn(config['batch_size'], config['sequence'], config['features'], device=device).float()
+    # --- Step 4: Calculate Statistics on FP32 Model ---
+    print("\n--- Calculating Statistics on FP32 Model ---")
+    overall_sparsity, total_params = count_nonzero_params(final_model_fp32)
+    with torch.cuda.device(0):
+        macs, _ = get_model_complexity_info(
+            final_model_fp32, (1, config['sequence'], config['features']),
+            as_strings=False, print_per_layer_stat=False, verbose=False
+        )
+    estimated_sparse_flops = 2 * macs * (1 - overall_sparsity)
+    print(f"Total MACs (dense): {macs:.2e} | Estimated Sparse FLOPs: {estimated_sparse_flops:.2e}")
+    wandb.log({"total_parameters_final": total_params, "overall_model_sparsity_final": overall_sparsity, "estimated_dense_MACs": macs, "estimated_sparse_FLOPs": estimated_sparse_flops})
 
-    # Ensure model is in evaluation mode for export
+    # --- Step 5: Apply Quantization (Optional) ---
+    final_model = final_model_fp32
+    
+    if config['quantization'] == 'FP16':
+        # --- FP16 Quantization (Original Logic) ---
+        print("\n--- Applying FP16 Quantization to the model ---")
+        final_model = quantize_fp16(copy.deepcopy(final_model_fp32))
+        print("FP16 quantization complete.")
+
+    elif config['quantization'] == 'INT8':
+        final_model = quantize_int8_static(final_model_fp32, train_loader, device)
+
+    # --- Step 6: Test the Final Model ---
+    start_time = time.perf_counter()
+    final_acc = test_and_report(final_model, test_loader, device, config['classes'])
+
+    time_dif, average_time = get_time(start_time, test=1, data=config['dataset_name'])
+
+    print(f"Testing Time usage: {time_dif:.10f} seconds")  
+    print(f"Average Testing time: {average_time:.10f} seconds")
+    wandb.log({
+        "final_test_accuracy": final_acc, 
+        "final_test_time": float(time_dif), 
+        "final_average_time_per_batch": float(average_time)
+    })
+
+    # --- Step 7: Export to ONNX ---
+    print("\n--- Exporting final model to ONNX ---")
+    onnx_base_path = config['model_path_pruned_finetuned'].replace(".pth", "")
+    onnx_path = f"{onnx_base_path}_{config['quantization']}.onnx"
+    
+    dummy_input = torch.randn(1, config['sequence'], config['features'], device=device)
+    if config['quantization'] == 'FP16':
+        dummy_input = dummy_input.half()
+    if config['quantization'] == 'INT8':
+        dummy_input = dummy_input.to('cpu')
+
     final_model.eval()
-
     try:
         torch.onnx.export(
-            final_model,
-            dummy_input,
-            onnx_path,
-            verbose=False,
-            opset_version=13, # Recommended opset for good TensorRT compatibility
-            input_names=['input'],
-            output_names=['output'],
-            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}} # For dynamic batching
+            final_model.to(dummy_input.device),
+            dummy_input, onnx_path, verbose=False, opset_version=13,
+            input_names=['input'], output_names=['output'],
+            dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
         )
-        print(f"Fine-tuned and pruned model exported to ONNX at: {onnx_path}")
-        wandb.log({"onnx_export_status": "success", "onnx_path": onnx_path})
-
+        print(f"Final model exported to ONNX at: {onnx_path}")
     except Exception as e:
         print(f"Error exporting model to ONNX: {e}")
-        wandb.log({"onnx_export_status": "failed", "onnx_error": str(e)})
 
     wandb.finish()

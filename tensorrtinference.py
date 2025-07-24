@@ -8,8 +8,19 @@ import wandb
 from data_processing import preprocess_data, prepare_dataloader
 import gc
 import yaml 
+from main import get_dataset_info
+import random
+import torch
 
-
+'''def seed_everything(seed: int) -> None:
+    """Sets the seed for reproducibility."""
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False'''
+    
 parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
 parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
 parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
@@ -28,8 +39,8 @@ quant = args.quantization
 num_features = config['features']
 
 print("TensorRT version:", trt.__version__)
-wandb.init(project="LiteNet-"+ data + "inference", mode="disabled")
-
+wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
+#seed_everything(134)
 # --- Configuration (Adjust these based on your model and environment) ---
 # Path to your TensorRT engine file
 # The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
@@ -175,15 +186,16 @@ if __name__ == "__main__":
 
     # --- Dataset Loading and Preprocessing ---
     # Fetch classes and feature file from config.yaml
-    classes = config.get('classes', [])
-    feature_file = config.get('feature_file')
-
+    classes, num_class, feature_file = get_dataset_info(config, args.data)
     # Load features
     try:
         most_important_list = np.load(feature_file)
     except FileNotFoundError:
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
+
+    
+
 
     # Load raw data
     try:
@@ -299,22 +311,26 @@ if __name__ == "__main__":
 
     avg_inferencetime = (total_inference_time_s / total_samples_processed) if num_processed_batches > 0 else 0
     throughput_qps = total_samples_processed / total_inference_time_s if total_inference_time_s > 0 else 0
-
+    throughput = 0.012/(float(avgpretime) + avg_inferencetime)
     print("\n--- Inference Summary ---")
     print(f"Total batches processed: {num_processed_batches}")
     print(f"Total samples processed: {total_samples_processed}")
     print(f"Total inference time: {total_inference_time_s:.4f} seconds")
     print(f"Average inference time per sample: {avg_inferencetime} s")
-    print(f"Overall Throughput: {throughput_qps:.2f} qps (queries per second)")
-
+    print(f"Throughput: {throughput_qps:.2f} qps (queries per second)")
+    print(f"Throughput (Mbps): {throughput:.2f} Mbps")
     # Optional: Calculate overall accuracy
-    from sklearn.metrics import accuracy_score
+    from sklearn.metrics import accuracy_score, classification_report
+
+    print('--- Classification Report ---')
+    print(classification_report(all_true_labels, all_predictions, target_names=classes, digits=4))
     if len(all_predictions) > 0:
         accuracy = accuracy_score(all_true_labels, all_predictions)
         print(f"Overall Accuracy on Test Set: {accuracy * 100:.2f}%")
         wandb.log({"test_accuracy_trt": accuracy})
         wandb.log({"trt_inferencetime_s": avg_inferencetime})
         wandb.log({"trt_throughput_qps": throughput_qps})
+        wandb.log({"Throughput_mbps": throughput})
     else:
         print("No batches processed for accuracy calculation.")
 

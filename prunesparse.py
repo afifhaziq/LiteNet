@@ -35,7 +35,7 @@ def seed_everything(seed: int) -> None:
 
 # --- 2. Argparser and Config ---
 parser = argparse.ArgumentParser(description='LiteNet Pruning, Fine-tuning, and Quantization')
-parser.add_argument('--dataset_name', type=str, help='(Optional) Override the active_dataset from config.yaml.')
+parser.add_argument('--data', type=str, help='(Optional) Override the active_dataset from config.yaml.')
 parser.add_argument('--quantization', type=str, default='None', choices=['None', 'FP16', 'INT8'], help='Type of quantization to apply after fine-tuning. INT8 is only supported for CPU.')
 parser.add_argument('--quantize-only', action='store_true', help='Skip pruning and fine-tuning, and load a pre-existing fine-tuned model for quantization.')
 args = parser.parse_args()
@@ -45,7 +45,7 @@ with open('config.yaml', 'r') as f:
     config = yaml.safe_load(f)
 
 # --- Override/Set Config with CLI Args ---
-dataset_name = args.dataset_name if args.dataset_name else config['active_dataset']
+dataset_name = args.data if args.data else config['active_dataset']
 config['dataset_name'] = dataset_name # Keep track of the active dataset
 config['quantization'] = args.quantization
 
@@ -71,7 +71,7 @@ config['model_path_pruned_finetuned'] = f"saved_dict/{base_output_name}_pruned_f
 
 # --- 3. WANDB Initialization ---
 seed_everything(config['seed'])
-wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="disabled", tags=[f"2:4_Linear_{config['quantization']}"], group='PruneQuant')
+wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="offline", tags=[f"2:4_Linear_{config['quantization']}"], group='PruneQuant')
 wandb.config.update(config)
 
 device = "cuda" if torch.cuda.is_available() else "cpu"

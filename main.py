@@ -14,15 +14,16 @@ from data_processing import preprocess_data
 from model import LiteNet, QuantizedLiteNet
 from train import train_model, get_time, evaluate_model
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+import torch
 
-def seed_everything(seed: int) -> None:
+'''def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = False'''
 
 def get_dataset_info(config, dataset_name):
     """Reads dataset-specific information from the config."""
@@ -42,7 +43,7 @@ def get_dataset_info(config, dataset_name):
 
 def training_model_pipeline(config):
     """Orchestrates the model training and evaluation pipeline."""
-    seed_everything(134)
+    #seed_everything(134)
 
     # --- Configuration ---
     dataset_name = config['dataset_name']
@@ -51,7 +52,7 @@ def training_model_pipeline(config):
     num_selected_features = sequence * features
     
     project_name = "LiteNet-" + re.sub(r'[\\/\#\?%:]', '_', str(dataset_name))
-    wandb.init(project=project_name, tags=[str(num_selected_features)], config=config, mode="disabled")
+    wandb.init(project=project_name, tags=[str(num_selected_features)], config=config, mode="online")
 
     # --- Load Data ---
     data_path = f"dataset/{dataset_name}"
@@ -75,7 +76,7 @@ def training_model_pipeline(config):
     # --- Model Setup ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = LiteNet(sequence=sequence, features=features, num_class=config['num_class']).to(device)
-    model_path = f"saved_dict/LiteNet_{dataset_name}_pruned_finetuned_INT8.pth"
+    model_path = f"saved_dict/LiteNet_{dataset_name}.pth"
 
     summary(model, input_size=(config['batch_size'], sequence, features), device=device)
 

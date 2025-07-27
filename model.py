@@ -62,7 +62,7 @@ class LiteNet(nn.Module):
     def forward(self, x):
         #print(f"Input shape at epoch start: {x.shape}")
         x = x.view(-1, self.sequence, self.features)  # Reshape input
-        print(f"Input shape at epoch start: {x.shape}")
+        #print(f"Input shape at epoch start: {x.shape}")
         branch1x1 = self.branch1x1(x)
         branch3x3 = self.branch3x3(x)
         branch5x5 = self.branch5x5(x)
@@ -76,7 +76,6 @@ class LiteNet(nn.Module):
         fc2_out = self.activation6(self.fc2(fc1_out))
         x = self.fc3(fc2_out)
 
-        l
         return x
 
 

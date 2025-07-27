@@ -14,16 +14,15 @@ from data_processing import preprocess_data
 from model import LiteNet, QuantizedLiteNet
 from train import train_model, get_time, evaluate_model
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-import torch
 
-'''def seed_everything(seed: int) -> None:
+def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False'''
+    torch.backends.cudnn.benchmark = False
 
 def get_dataset_info(config, dataset_name):
     """Reads dataset-specific information from the config."""
@@ -43,7 +42,7 @@ def get_dataset_info(config, dataset_name):
 
 def training_model_pipeline(config):
     """Orchestrates the model training and evaluation pipeline."""
-    #seed_everything(134)
+    seed_everything(134)
 
     # --- Configuration ---
     dataset_name = config['dataset_name']
@@ -52,7 +51,7 @@ def training_model_pipeline(config):
     num_selected_features = sequence * features
     
     project_name = "LiteNet-" + re.sub(r'[\\/\#\?%:]', '_', str(dataset_name))
-    wandb.init(project=project_name, tags=[str(num_selected_features)], config=config, mode="online")
+    wandb.init(project=project_name, tags=[str(num_selected_features)], config=config, mode="disabled")
 
     # --- Load Data ---
     data_path = f"dataset/{dataset_name}"
@@ -62,9 +61,8 @@ def training_model_pipeline(config):
     print('Data loaded')
 
     # --- Feature Selection ---
-    feature_list_file = config['feature_file']
-    print(f"Loading feature list from: {feature_list_file}")
-    most_important_list = np.load(feature_list_file)
+    print(f"Loading feature list from: {config['feature_file']}")
+    most_important_list = np.load(config['feature_file'])
     
     print(f"Selected {len(most_important_list)} features.")
     print('Preprocessing data...')
@@ -75,8 +73,15 @@ def training_model_pipeline(config):
 
     # --- Model Setup ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LiteNet(sequence=sequence, features=features, num_class=config['num_class']).to(device)
-    model_path = f"saved_dict/LiteNet_{dataset_name}.pth"
+    model = LiteNet(
+        sequence=sequence, 
+        features=features, 
+        num_class=config['num_class']
+    ).to(device)
+    
+    # Model path is now taken directly from the config
+    model_path = config['model_path']
+    print(f"Using model path: {model_path}")
 
     summary(model, input_size=(config['batch_size'], sequence, features), device=device)
 
@@ -153,6 +158,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='LiteNet Training and Testing')
     parser.add_argument('--dataset_name', type=str, help='Name of the dataset folder in ./dataset/')
     parser.add_argument('--test', type=bool, default=False, help='Enable test-only mode.')
+    parser.add_argument('--path', type=str, default=None, help='Path to model. Overrides default path generation. Can be a filename in saved_dict/ or a full path.')
     args = parser.parse_args()
 
     # --- Load Base Config ---
@@ -164,19 +170,33 @@ if __name__ == "__main__":
         config['dataset_name'] = args.dataset_name
     else:
         config['dataset_name'] = config.get('active_dataset')
-
+    
     if not config.get('dataset_name'):
         print("Error: No dataset specified. Use --dataset_name or set active_dataset in config.yaml.")
         exit()
     
+    # --- Determine model path: prioritize --path flag, then fall back to default ---
+    if args.path:
+        user_path = args.path
+        # If it's a full path, use it. If it's just a filename, assume it's in saved_dict/
+        if '/' in user_path or '\\' in user_path:
+            config['model_path'] = user_path
+        else:
+            config['model_path'] = f"saved_dict/{user_path}"
+    else:
+        # Default path if --path is not provided
+        config['model_path'] = f"saved_dict/LiteNet_{config['dataset_name']}.pth"
+
+    # --- Add CLI args to config ---
+    config['test_mode'] = args.test
+
     # --- Dynamically Set Config Values ---
     classes, num_class, feature_file = get_dataset_info(config, config['dataset_name'])
     config['num_class'] = num_class
     config['classes'] = classes
     config['feature_file'] = feature_file
     
-    # Set test_mode in config for the pipeline
-    config['test_mode'] = args.test
     
+
     training_model_pipeline(config)
 

@@ -33,9 +33,9 @@ def train_full_model(config):
 
     # --- Load Data and Train ---
     print("Loading dataset for training...")
-    train_data = np.load(f"dataset/{dataset_name}/train.npy", allow_pickle=True)
-    test_data = np.load(f"dataset/{dataset_name}/test.npy", allow_pickle=True)
-    val_data = np.load(f"dataset/{dataset_name}/val.npy", allow_pickle=True)
+    train_data = np.load(f"dataset/{dataset_name}/train.npy")
+    test_data = np.load(f"dataset/{dataset_name}/test.npy")
+    val_data = np.load(f"dataset/{dataset_name}/val.npy")
     
 
     

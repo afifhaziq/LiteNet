@@ -5,71 +5,22 @@ import numpy as np
 import time
 import argparse
 import wandb
-from data_processing import preprocess_data, prepare_dataloader
+from data_processing import preprocess_data
 import gc
 import yaml 
 from main import get_dataset_info
 import random
 import torch
 
-'''def seed_everything(seed: int) -> None:
+def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False'''
+    torch.backends.cudnn.benchmark = False
     
-parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
-parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
-parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
-args = parser.parse_args()
-
-# --- Load Configuration from YAML ---
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# Add dataset name from args to the config
-config['dataset_name'] = args.data
-
-data = args.data
-quant = args.quantization 
-
-num_features = config['features']
-
-print("TensorRT version:", trt.__version__)
-wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
-#seed_everything(134)
-# --- Configuration (Adjust these based on your model and environment) ---
-# Path to your TensorRT engine file
-# The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
-TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
-
-# Define the expected input and output tensor names from ONNX model
-INPUT_NAME = "input"  # As used in trtexec --shapes=...
-OUTPUT_NAME = "output" # ONNX model's last layer
-
-# Define the fixed input and output shapes/types used when building the engine
-INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
-OUTPUT_SHAPE = (config["batch_size"], config["num_class"]) # Adjust based on your model's actual output shape
-NUM_INFERENCE_RUNS = 1000
-WARMUP_RUNS = 100
-# TensorRT engine was built with FP16 or INT8 precision
-if quant == "fp16":
-    INPUT_DTYPE = np.float16
-    OUTPUT_DTYPE = np.float16
-elif quant == "int8":
-    INPUT_DTYPE = np.float32  # INT8 engines often take float32 input for calibration, but check your engine
-    OUTPUT_DTYPE = np.float32
-else:
-    INPUT_DTYPE = np.float32
-    OUTPUT_DTYPE = np.float32
-
-
-
-
-
 # --- Helper Function for TensorRT Engine Loading and Inference ---
 class HostDeviceMem:
     """Helper class for managing host and device memory."""
@@ -175,6 +126,53 @@ def do_inference(context, bindings, inputs, outputs, stream):
 
 # --- Main Inference Logic ---
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
+    parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
+    parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
+    parser.add_argument('--path', type=str, default=None, help='Path to TensorRT engine. Overrides default path generation.')
+    args = parser.parse_args()
+
+    # --- Load Configuration from YAML ---
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Add dataset name from args to the config
+    config['dataset_name'] = args.data
+    data = args.data
+    quant = args.quantization 
+
+    # Determine engine path
+    if args.path:
+        user_path = args.path
+        if '/' in user_path or '\\' in user_path:
+            TRT_ENGINE_PATH = user_path
+        else:
+            TRT_ENGINE_PATH = f"saved_dict/{user_path}"
+    else:
+        # Default path if --path is not provided
+        TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
+
+    print("TensorRT version:", trt.__version__)
+    wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
+    seed_everything(134)
+    
+    # --- Configuration ---
+    INPUT_NAME = "input"
+    OUTPUT_NAME = "output"
+    INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
+    OUTPUT_SHAPE = (config["batch_size"], config["num_class"])
+    NUM_INFERENCE_RUNS = 1000
+    WARMUP_RUNS = 100
+    if quant == "fp16":
+        INPUT_DTYPE = np.float16
+        OUTPUT_DTYPE = np.float16
+    elif quant == "int8":
+        INPUT_DTYPE = np.float32
+        OUTPUT_DTYPE = np.float32
+    else:
+        INPUT_DTYPE = np.float32
+        OUTPUT_DTYPE = np.float32
+
     TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
 
     print(f"Loading TensorRT Engine from: {TRT_ENGINE_PATH}...")
@@ -193,8 +191,6 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
-
-    
 
 
     # Load raw data
@@ -265,8 +261,7 @@ if __name__ == "__main__":
         # Also ensure the shape is correct (BATCH_SIZE, DIM1, DIM2)
         
         # Squeeze the sequence dimension if it's 1 and not needed for NumPy input
-        # Your PyTorch DataLoader likely gives (batch_size, sequence, features)
-        # TensorRT expects (batch_size, sequence, features) as well here, so direct conversion should be fine.
+        
         
         # Move to CPU if it's on GPU (DataLoaders usually yield CPU tensors unless specified)
         if batch_data.is_cuda:

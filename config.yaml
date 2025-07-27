@@ -8,7 +8,7 @@ learning_rate: 0.003
 num_class: 10
 test_mode: false
 fine_tune_epochs: 30
-fine_tune_lr: 0.001
+fine_tune_lr: 0.003
 
 # --- Dataset Specific Settings ---
 # Default dataset to use if not specified by a command-line argument

@@ -42,9 +42,9 @@ def prepare_dataloader(x_train, y_train, x_test, y_test, x_val, y_val, batch_siz
     # Dtype conversion AND Normalization
     # 1. Convert the uint8 data to float32
     # 2. Normalize the values from [0, 255] to [0, 1]
-    x_train = torch.from_numpy(x_train.astype(np.float32)/255.0)
-    x_test = torch.from_numpy(x_test.astype(np.float32)/255.0)
-    x_val = torch.from_numpy(x_val.astype(np.float32)/255.0)
+    x_train = torch.from_numpy(x_train.astype(np.float32))
+    x_test = torch.from_numpy(x_test.astype(np.float32))
+    x_val = torch.from_numpy(x_val.astype(np.float32))
 
     # Labels remain as int64
     y_train = torch.from_numpy(y_train.astype(np.int64))

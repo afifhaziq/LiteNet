@@ -5,70 +5,22 @@ import numpy as np
 import time
 import argparse
 import wandb
-from data_processing import preprocess_data, prepare_dataloader
+from data_processing import preprocess_data
 import gc
 import yaml 
 from main import get_dataset_info
 import random
 import torch
 
-'''def seed_everything(seed: int) -> None:
+def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False'''
+    torch.backends.cudnn.benchmark = False
     
-parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
-parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
-parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
-args = parser.parse_args()
-
-# --- Load Configuration from YAML ---
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# Add dataset name from args to the config
-config['dataset_name'] = args.data
-
-data = args.data
-quant = args.quantization 
-
-num_features = config['features']
-
-print("TensorRT version:", trt.__version__)
-wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
-#seed_everything(134)
-# --- Configuration (Adjust these based on your model and environment) ---
-# Path to your TensorRT engine file
-# The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
-TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
-
-# Define the expected input and output tensor names from ONNX model
-INPUT_NAME = "input"  # As used in trtexec --shapes=...
-OUTPUT_NAME = "output" # ONNX model's last layer
-
-# Define the fixed input and output shapes/types used when building the engine
-INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
-OUTPUT_SHAPE = (config["batch_size"], config["num_class"]) # Adjust based on your model's actual output shape
-NUM_INFERENCE_RUNS = 1000
-WARMUP_RUNS = 100
-# TensorRT engine was built with FP16 or INT8 precision
-if quant == "fp16":
-    INPUT_DTYPE = np.float16
-    OUTPUT_DTYPE = np.float16
-elif quant == "int8":
-    INPUT_DTYPE = np.float32  # INT8 engines often take float32 input for calibration, but check your engine
-    OUTPUT_DTYPE = np.float32
-else:
-    INPUT_DTYPE = np.float32
-    OUTPUT_DTYPE = np.float32
-
-
-
-
 
 # --- Helper Function for TensorRT Engine Loading and Inference ---
 class HostDeviceMem:
@@ -92,7 +44,6 @@ def allocate_buffers(engine):
     outputs = [] # HostDeviceMem objects for output tensors
     
     # This dictionary will store the device memory pointers, indexed by tensor name.
-    # It's crucial for building the final 'bindings' list in the correct order for execute_v2.
     device_memory_map = {} 
     
     stream = cuda.Stream() # CUDA stream for asynchronous operations
@@ -102,15 +53,15 @@ def allocate_buffers(engine):
     for i in range(engine.num_io_tensors):
         # Get the name of the tensor using its index.
         # In TensorRT 10.x, many tensor properties are queried using the tensor's name.
-        tensor_name = engine.get_tensor_name(i) # <--- THIS IS THE CORRECT METHOD
+        tensor_name = engine.get_tensor_name(i)
         
         # Determine if the tensor is an input or an output.
         # Use get_tensor_mode and compare with trt.TensorIOMode enum.
-        is_input = engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT # <--- THIS IS THE CORRECT METHOD
+        is_input = engine.get_tensor_mode(tensor_name) == trt.TensorIOMode.INPUT 
 
         # Get the shape and data type of the tensor using its name.
-        shape = engine.get_tensor_shape(tensor_name) # <--- THIS IS THE CORRECT METHOD
-        dtype = trt.nptype(engine.get_tensor_dtype(tensor_name)) # <--- THIS IS THE CORRECT METHOD
+        shape = engine.get_tensor_shape(tensor_name) 
+        dtype = trt.nptype(engine.get_tensor_dtype(tensor_name)) 
 
         # Calculate the total number of elements for the buffer.
         # For fixed batch size engines, get_tensor_shape already includes the batch dimension
@@ -133,15 +84,12 @@ def allocate_buffers(engine):
         else:
             outputs.append(HostDeviceMem(host_mem, device_mem))
             
-    # CRITICAL STEP: Construct the 'bindings' list in the exact order required by execute_v2.
-    # The order of device pointers in the 'bindings' list must match the order
-    # of tensors as they are internally represented by the engine (which can be obtained
-    # by iterating get_tensor_name(i) for i from 0 to num_io_tensors - 1).
-    bindings = [0] * engine.num_io_tensors # Initialize a list of the correct size
+    
+    bindings = [0] * engine.num_io_tensors 
 
     for i in range(engine.num_io_tensors):
         tensor_name = engine.get_tensor_name(i)
-        bindings[i] = device_memory_map[tensor_name] # Populate list in correct order
+        bindings[i] = device_memory_map[tensor_name] 
 
     return inputs, outputs, bindings, stream
 
@@ -175,13 +123,61 @@ def do_inference(context, bindings, inputs, outputs, stream):
 
 # --- Main Inference Logic ---
 if __name__ == "__main__":
-    TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+    parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
+    parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
+    parser.add_argument('--data', type=str, default='ISCXVPN2016', help='input dataset source (e.g., ISCXVPN2016 or MALAYAGT)')
+    parser.add_argument('--path', type=str, default=None, help='Path to TensorRT engine. Overrides default path generation.')
+    args = parser.parse_args()
 
+    # --- Load Configuration from YAML ---
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    # Add dataset name from args to the config
+    config['dataset_name'] = args.data
+    data = args.data
+    quant = args.quantization 
+
+    # Determine engine path
+    if args.path:
+        user_path = args.path
+        if '/' in user_path or '\\' in user_path:
+            TRT_ENGINE_PATH = user_path
+        else:
+            TRT_ENGINE_PATH = f"saved_dict/{user_path}"
+    else:
+        # Default path if --path is not provided
+        TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_pruned_finetuned_embedding_{quant}.trt"
+
+    print("TensorRT version:", trt.__version__)
+    wandb.init(project="LiteNet-"+ data + "-inference", mode="disabled")
+    seed_everything(134)
+    
+    # --- Configuration ---
+    INPUT_NAME = "input"
+    OUTPUT_NAME = "output"
+    INPUT_SHAPE = (config["batch_size"], config["features"])
+    OUTPUT_SHAPE = (config["batch_size"], config["num_class"])
+    NUM_INFERENCE_RUNS = 1000
+    WARMUP_RUNS = 100
+    if quant.lower() == "fp16":
+        INPUT_DTYPE = np.float16
+        OUTPUT_DTYPE = np.float16
+    elif quant.lower() == "int8":
+        INPUT_DTYPE = np.float32
+        OUTPUT_DTYPE = np.float32
+    else:
+        INPUT_DTYPE = np.float32
+        OUTPUT_DTYPE = np.float32
+
+    TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+    seed_everything(134)
     print(f"Loading TensorRT Engine from: {TRT_ENGINE_PATH}...")
     with open(TRT_ENGINE_PATH, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         engine = runtime.deserialize_cuda_engine(f.read())
         print("Engine loaded successfully.")
-
+        
+    
     context = engine.create_execution_context()
 
     # --- Dataset Loading and Preprocessing ---
@@ -194,9 +190,6 @@ if __name__ == "__main__":
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
 
-    
-
-
     # Load raw data
     try:
         train_data_npy = np.load(f"dataset/{config['dataset_name']}/train.npy")
@@ -208,7 +201,7 @@ if __name__ == "__main__":
         
     # Preprocess data to get DataLoaders
     # IMPORTANT: Ensure prepare_dataloader is correctly imported and returns what's expected
-    train_loader, test_loader, val_loader, pretime, avgpretime = preprocess_data(
+    _, test_loader, _, pretime, avgpretime = preprocess_data(
         train_data_npy, test_data_npy, val_data_npy, most_important_list,
         config['batch_size'], config['dataset_name']
     )
@@ -216,7 +209,7 @@ if __name__ == "__main__":
     wandb.log({"preprocess_time": float(pretime)})
     wandb.log({"average_preprocess_time": float(avgpretime)})
 
-    del train_data_npy, test_data_npy, val_data_npy, most_important_list
+    del train_data_npy, test_data_npy, val_data_npy, most_important_list, 
     gc.collect()
 
     # Allocate buffers for inputs and outputs once
@@ -226,9 +219,7 @@ if __name__ == "__main__":
 
     # --- Warmup Phase ---
     print(f"\nStarting {WARMUP_RUNS} warmup runs...")
-    # Get a single batch for warmup. We use next(iter(test_loader))
-    # but make sure test_loader is large enough or re-initialize if needed.
-    # For robustness, consider creating dummy data for warmup if your test_loader is small.
+
     try:
         # Get one batch for warmup. If test_loader is exhausted, re-initialize or use dummy data.
         warmup_batch_data, _ = next(iter(test_loader))
@@ -239,6 +230,8 @@ if __name__ == "__main__":
         print("Warning: Test loader exhausted during warmup data retrieval. Using dummy data for warmup.")
         warmup_input_np = np.random.rand(*INPUT_SHAPE).astype(INPUT_DTYPE)
 
+    print("input_host_buffer", input_host_buffer.dtype)
+    print("warmup_input_np", warmup_input_np.dtype)
     np.copyto(input_host_buffer, warmup_input_np) # Copy dummy/first batch data to host buffer
 
     for _ in range(WARMUP_RUNS):
@@ -260,21 +253,24 @@ if __name__ == "__main__":
     num_processed_batches = 0
 
     for i, (batch_data, batch_labels) in enumerate(test_loader):
-        # 1. Convert PyTorch Tensor to NumPy Array
-        # Ensure it's on CPU before converting to NumPy, and matches expected dtype.
-        # Also ensure the shape is correct (BATCH_SIZE, DIM1, DIM2)
         
-        # Squeeze the sequence dimension if it's 1 and not needed for NumPy input
-        # Your PyTorch DataLoader likely gives (batch_size, sequence, features)
-        # TensorRT expects (batch_size, sequence, features) as well here, so direct conversion should be fine.
-        
-        # Move to CPU if it's on GPU (DataLoaders usually yield CPU tensors unless specified)
+        # Move to CPU if it's on GPU 
         if batch_data.is_cuda:
             batch_data = batch_data.cpu()
         
         # Convert to NumPy and cast to FP16
         input_np_batch = batch_data.numpy().astype(INPUT_DTYPE)
-        input_np_batch = input_np_batch.reshape(INPUT_SHAPE)
+
+        '''if 'debug_printed' not in locals():
+            print("\n--- TensorRT DEBUG (First Batch) ---")
+            print("Shape:", input_np_batch.shape)
+            print("DType:", input_np_batch.dtype)
+            print("Mean:", input_np_batch.mean())
+            print("Std:", input_np_batch.std())
+            print("First few values:", input_np_batch.flatten()[:5])
+            print("-----------------------------------\n")
+            debug_printed = True'''
+        #input_np_batch = input_np_batch.reshape(INPUT_SHAPE)
         # Validate shape and data type before copying
         if input_np_batch.shape != INPUT_SHAPE:
             print(f"Warning: Batch {i} data shape mismatch! Expected {INPUT_SHAPE}, got {input_np_batch.shape}. Skipping batch.")
@@ -284,13 +280,12 @@ if __name__ == "__main__":
         np.copyto(input_host_buffer, input_np_batch)
 
         # 3. Perform Inference
-        # We don't need to pass batch_size to do_inference anymore since it's fixed in engine
         trt_output_batch = do_inference(context, bindings, inputs, outputs, stream)
         
         # The result trt_output_batch is a list of NumPy arrays (one per output tensor)
         output_data_np = trt_output_batch[0].reshape(OUTPUT_SHAPE) # Reshape to expected output shape
 
-        # 4. Post-processing (e.g., getting predicted classes)
+        # 4. Post-processing
         # Assuming classification, apply argmax to get predicted labels
         predicted_labels = np.argmax(output_data_np, axis=1)
         

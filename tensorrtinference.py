@@ -12,14 +12,14 @@ from main import get_dataset_info
 import random
 import torch
 
-'''def seed_everything(seed: int) -> None:
+def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False'''
+    torch.backends.cudnn.benchmark = False
     
 parser = argparse.ArgumentParser(description='TensorRT Inference Benchmarking')
 parser.add_argument('--quantization', type=str, default="FP16", help="FP16 or INT8")
@@ -39,34 +39,34 @@ quant = args.quantization
 num_features = config['features']
 
 print("TensorRT version:", trt.__version__)
-wandb.init(project="LiteNet-"+ data + "-inference", mode="online")
-#seed_everything(134)
+wandb.init(project="LiteNet-"+ data + "-inference", mode="offline")
+
 # --- Configuration (Adjust these based on your model and environment) ---
 # Path to your TensorRT engine file
 # The engine file should be named as: LiteNet_{dataset}_{quant}_sparse.trt (e.g., LiteNet_ISCXVPN2016_fp16_sparse.trt)
-TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
+#TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_{quant}.trt"
+TRT_ENGINE_PATH = f"saved_dict/LiteNet_{data}_pruned_finetuned_embedding_{quant}.trt"
 
 # Define the expected input and output tensor names from ONNX model
 INPUT_NAME = "input"  # As used in trtexec --shapes=...
 OUTPUT_NAME = "output" # ONNX model's last layer
 
 # Define the fixed input and output shapes/types used when building the engine
-INPUT_SHAPE = (config["batch_size"], config["sequence"], config["features"])
+INPUT_SHAPE = (config["batch_size"], config["features"])
 OUTPUT_SHAPE = (config["batch_size"], config["num_class"]) # Adjust based on your model's actual output shape
 NUM_INFERENCE_RUNS = 1000
 WARMUP_RUNS = 100
+
 # TensorRT engine was built with FP16 or INT8 precision
-if quant == "fp16":
+if quant.lower() == "fp16":
     INPUT_DTYPE = np.float16
     OUTPUT_DTYPE = np.float16
-elif quant == "int8":
+elif quant.lower() == "int8":
     INPUT_DTYPE = np.float32  # INT8 engines often take float32 input for calibration, but check your engine
     OUTPUT_DTYPE = np.float32
 else:
     INPUT_DTYPE = np.float32
     OUTPUT_DTYPE = np.float32
-
-
 
 
 
@@ -176,12 +176,13 @@ def do_inference(context, bindings, inputs, outputs, stream):
 # --- Main Inference Logic ---
 if __name__ == "__main__":
     TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
-
+    seed_everything(134)
     print(f"Loading TensorRT Engine from: {TRT_ENGINE_PATH}...")
     with open(TRT_ENGINE_PATH, "rb") as f, trt.Runtime(TRT_LOGGER) as runtime:
         engine = runtime.deserialize_cuda_engine(f.read())
         print("Engine loaded successfully.")
-
+        
+    
     context = engine.create_execution_context()
 
     # --- Dataset Loading and Preprocessing ---
@@ -193,9 +194,6 @@ if __name__ == "__main__":
     except FileNotFoundError:
         print(f"Error: Feature file '{feature_file}' not found.")
         exit()
-
-    
-
 
     # Load raw data
     try:
@@ -274,7 +272,17 @@ if __name__ == "__main__":
         
         # Convert to NumPy and cast to FP16
         input_np_batch = batch_data.numpy().astype(INPUT_DTYPE)
-        input_np_batch = input_np_batch.reshape(INPUT_SHAPE)
+
+        '''if 'debug_printed' not in locals():
+            print("\n--- TensorRT DEBUG (First Batch) ---")
+            print("Shape:", input_np_batch.shape)
+            print("DType:", input_np_batch.dtype)
+            print("Mean:", input_np_batch.mean())
+            print("Std:", input_np_batch.std())
+            print("First few values:", input_np_batch.flatten()[:5])
+            print("-----------------------------------\n")
+            debug_printed = True'''
+        #input_np_batch = input_np_batch.reshape(INPUT_SHAPE)
         # Validate shape and data type before copying
         if input_np_batch.shape != INPUT_SHAPE:
             print(f"Warning: Batch {i} data shape mismatch! Expected {INPUT_SHAPE}, got {input_np_batch.shape}. Skipping batch.")

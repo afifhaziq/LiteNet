@@ -16,14 +16,14 @@ from train import train_model, get_time, evaluate_model
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 import torch
 
-'''def seed_everything(seed: int) -> None:
+def seed_everything(seed: int) -> None:
     """Sets the seed for reproducibility."""
     np.random.seed(seed)
     random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False'''
+    torch.backends.cudnn.benchmark = False
 
 def get_dataset_info(config, dataset_name):
     """Reads dataset-specific information from the config."""
@@ -75,8 +75,14 @@ def training_model_pipeline(config):
 
     # --- Model Setup ---
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LiteNet(sequence=sequence, features=features, num_class=config['num_class']).to(device)
-    model_path = f"saved_dict/LiteNet_{dataset_name}.pth"
+    model = LiteNet(
+        sequence=sequence, 
+        features=features, 
+        num_class=config['num_class'],
+        vocab_size=256,
+        embedding_dim=24,
+    ).to(device)
+    model_path = f"saved_dict/LiteNet_{dataset_name}_embedding.pth"
 
     summary(model, input_size=(config['batch_size'], sequence, features), device=device)
 

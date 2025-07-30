@@ -76,8 +76,9 @@ def training_model_pipeline(config):
     model = LiteNet(
         sequence=sequence, 
         features=features, 
-        num_class=config['num_class']
-    ).to(device)
+        num_class=config['num_class'],
+        vocab_size=256,
+        embedding_dim=24).to(device)
     
     # Model path is now taken directly from the config
     model_path = config['model_path']
@@ -185,7 +186,7 @@ if __name__ == "__main__":
             config['model_path'] = f"saved_dict/{user_path}"
     else:
         # Default path if --path is not provided
-        config['model_path'] = f"saved_dict/LiteNet_{config['dataset_name']}.pth"
+        config['model_path'] = f"saved_dict/LiteNet_{config['dataset_name']}_embedding.pth"
 
     # --- Add CLI args to config ---
     config['test_mode'] = args.test

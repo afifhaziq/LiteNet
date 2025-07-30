@@ -33,57 +33,6 @@ def seed_everything(seed: int) -> None:
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-# --- 2. Argparser and Config ---
-parser = argparse.ArgumentParser(description='LiteNet Pruning, Fine-tuning, and Quantization')
-parser.add_argument('--data', type=str, help='(Optional) Override the active_dataset from config.yaml.')
-parser.add_argument('--quantization', type=str, default='None', choices=['None', 'FP16', 'INT8'], help='Type of quantization to apply after fine-tuning. INT8 is only supported for CPU.')
-parser.add_argument('--quantize-only', action='store_true', help='Skip pruning and fine-tuning, and load a pre-existing fine-tuned model for quantization.')
-args = parser.parse_args()
-
-# --- Load Base Config from YAML ---
-with open('config.yaml', 'r') as f:
-    config = yaml.safe_load(f)
-
-# --- Override/Set Config with CLI Args ---
-dataset_name = args.data if args.data else config['active_dataset']
-config['dataset_name'] = dataset_name # Keep track of the active dataset
-config['quantization'] = args.quantization
-
-# --- Get Dataset-Specific Settings ---
-try:
-    dataset_config = config['datasets'][dataset_name]
-    config.update(dataset_config) # Merge dataset-specific settings into main config
-except KeyError:
-    print(f"Error: Dataset '{dataset_name}' not found in config.yaml under the 'datasets' key.")
-    exit()
-
-# --- Set derived config values ---
-#sequence = config['sequence']
-#features = config['features']
-#num_features = sequence * features
-# Use a more descriptive base name for the output files this script generates
-#base_output_name = f"saved_dict/LiteNet_{dataset_name}"
-
-# Corrected path for loading the original model, matching the files in saved_dict
-config['model_path'] = f"saved_dict/LiteNet_{dataset_name}_embedding.pth" 
-
-
-config['model_path_pruned_finetuned'] = f"saved_dict/LiteNet_{dataset_name}_pruned_finetuned_embedding.pth"
-
-# --- 3. WANDB Initialization ---
-seed_everything(config['seed'])
-wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="offline", tags=[f"2:4_Linear_{config['quantization']}"], group='PruneQuant')
-wandb.config.update(config)
-
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"--- Configuration ---")
-for key, value in config.items():
-    if key != 'datasets': # Don't print the whole datasets dict
-        print(f"  {key}: {value}")
-print(f"Using device: {device}")
-print("-" * 21)
-
-# --- 4. Sparsity and Pruning Functions ---
 
 def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
     """
@@ -96,6 +45,9 @@ def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
         return tensor
 
     original_shape = tensor.shape
+
+    # Flatten the tensor into rows and columns (rows = Inputs, columns = Outputs)
+    # So it becomes a matrix of shape (num_rows, num_cols) with rows representing the weight tensor's inputs and columns representing the weight tensor's outputs
     num_rows = int(np.prod(original_shape[:-1]))
     num_cols = original_shape[-1]
     
@@ -156,12 +108,75 @@ def count_nonzero_params(model):
     print(f"Overall Model Sparsity: {(overall_sparsity):.1%}")
     return overall_sparsity, nonzero
 
-# --- 6. Quantization Functions ---
-
-# --- 7. Main Execution Block ---
+# --- 3. Main Execution Block ---
 if __name__ == '__main__':
-    # --- Data Loading and Feature Selection (Corrected) ---
-    # This logic now exactly matches main.py
+    # --- Argparser and Config ---
+    parser = argparse.ArgumentParser(description='LiteNet Pruning, Fine-tuning, and Quantization')
+    parser.add_argument('--dataset_name', type=str, help='(Optional) Override the active_dataset from config.yaml.')
+    parser.add_argument('--quantization', type=str, default='None', choices=['None', 'FP16', 'INT8'], help='Type of quantization to apply after fine-tuning. INT8 is only supported for CPU.')
+    parser.add_argument('--quantize-only', action='store_true', help='Skip pruning and fine-tuning, and load a pre-existing fine-tuned model for quantization.')
+    parser.add_argument('--path', type=str, default=None, help='Path to the input model. Overrides default path generation.')
+    args = parser.parse_args()
+
+    # --- Load Base Config from YAML ---
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    # --- Override/Set Config with CLI Args ---
+    dataset_name = args.dataset_name if args.dataset_name else config['active_dataset']
+    config['dataset_name'] = dataset_name # Keep track of the active dataset
+    config['quantization'] = args.quantization
+
+    # --- Get Dataset-Specific Settings ---
+    try:
+        dataset_config = config['datasets'][dataset_name]
+        config.update(dataset_config) # Merge dataset-specific settings into main config
+    except KeyError:
+        print(f"Error: Dataset '{dataset_name}' not found in config.yaml under the 'datasets' key.")
+        exit()
+
+    # --- Set derived config values ---
+    # Define the output path for the pruned and fine-tuned model
+    config['model_path_pruned_finetuned'] = f"saved_dict/LiteNet_{dataset_name}_pruned_finetuned_embedding.pth"
+
+    # Determine the correct input model path based on flags
+    if args.quantize_only:
+        # If quantizing only, the input is the fine-tuned model
+        if args.path:
+            user_path = args.path
+            if '/' in user_path or '\\' in user_path:
+                config['input_model_path'] = user_path
+            else:
+                config['input_model_path'] = f"saved_dict/{user_path}"
+        else:
+            # Default to the standard fine-tuned model path
+            config['input_model_path'] = config['model_path_pruned_finetuned']
+    else:
+        # If running the full pipeline, the input is the original pre-trained model
+        if args.path:
+            user_path = args.path
+            if '/' in user_path or '\\' in user_path:
+                config['input_model_path'] = user_path
+            else:
+                config['input_model_path'] = f"saved_dict/LiteNet_{dataset_name}_embedding.pth"
+        else:
+            # Default to the standard pre-trained model path
+            config['input_model_path'] = f"saved_dict/LiteNet_{dataset_name}_embedding.pth"
+
+    # --- WANDB Initialization ---
+    seed_everything(config['seed'])
+    wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="disabled", tags=[f"2:4_Linear_{config['quantization']}"])
+    wandb.config.update(config)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"--- Configuration ---")
+    for key, value in config.items():
+        if key != 'datasets': # Don't print the whole datasets dict
+            print(f"  {key}: {value}")
+    print(f"Using device: {device}")
+    print("-" * 21)
+    
+    # --- Data Loading and Feature Selection ---
     feature_list_file = f"top_features_{config['dataset_name']}.npy"
     print(f"Loading feature list from: {feature_list_file}")
     most_important_list = np.load(feature_list_file)
@@ -188,6 +203,7 @@ if __name__ == '__main__':
     if not args.quantize_only:
         # --- Step 1: Pruning and Fine-Tuning ---
         print("\n--- Running in Full Mode: Pruning and Fine-Tuning ---")
+
         #model = LiteNet(sequence=config['sequence'], features=config['features'], num_class=config['num_class']).to(device)
         model = LiteNet(sequence=config['sequence'], 
                         features=config['features'], 
@@ -195,8 +211,9 @@ if __name__ == '__main__':
                         vocab_size=256,
                         embedding_dim=24).to(device)
         
-        print(f"Loading original pre-trained model from: {config['model_path']}")
-        model.load_state_dict(torch.load(config['model_path']))
+        print(f"Loading original pre-trained model from: {config['input_model_path']}")
+        model.load_state_dict(torch.load(config['input_model_path']))
+
 
         pruned_model = prune_model(copy.deepcopy(model))
         pruned_model = pruned_model.to(device)
@@ -224,16 +241,23 @@ if __name__ == '__main__':
 
     # --- Step 2: Load the best fine-tuned model for post-processing ---
     print(f"\n--- Final Evaluation and Post-Processing ---")
+
     final_model_fp32 = model = LiteNet(sequence=config['sequence'], 
                         features=config['features'], 
                         num_class=config['num_class'],
                         vocab_size=256,
                         embedding_dim=24).to(device)
     print(f"Loading best fine-tuned model from: {config['model_path_pruned_finetuned']}")
-    print(final_model_fp32)
+    #print(final_model_fp32)
     final_model_fp32.load_state_dict(torch.load(config['model_path_pruned_finetuned']))
+
     
-    # --- Step 4: Calculate Statistics on FP32 Model ---
+    path_to_load = config['model_path_pruned_finetuned'] if not args.quantize_only else config['input_model_path']
+
+    print(f"Loading best fine-tuned model from: {path_to_load}")
+    final_model_fp32.load_state_dict(torch.load(path_to_load))
+    
+    # --- Step 3: Calculate Statistics on FP32 Model ---
     print("\n--- Calculating Statistics on FP32 Model ---")
     overall_sparsity, total_params = count_nonzero_params(final_model_fp32)
     with torch.cuda.device(0):
@@ -241,12 +265,11 @@ if __name__ == '__main__':
             final_model_fp32, ( config['sequence'], config['features']),
             as_strings=False, print_per_layer_stat=False, verbose=False
         )
-    print(type(macs))
     estimated_sparse_flops = 2 * macs * (1 - overall_sparsity)
     print(f"Total MACs (dense): {macs:.2e} | Estimated Sparse FLOPs: {estimated_sparse_flops:.2e}")
     wandb.log({"total_parameters_final": total_params, "overall_model_sparsity_final": overall_sparsity, "estimated_dense_MACs": macs, "estimated_sparse_FLOPs": estimated_sparse_flops})
 
-    # --- Step 5: Apply Quantization (Optional) ---
+    # --- Step 4: Apply Quantization (Optional) ---
     final_model = final_model_fp32
     
     if config['quantization'] == 'FP16':
@@ -259,7 +282,7 @@ if __name__ == '__main__':
     elif config['quantization'] == 'INT8':
         final_model = quantize_int8_static(final_model_fp32, train_loader, device)
 
-    # --- Step 6: Test the Final Model ---
+    # --- Step 5: Test the Final Model ---
     start_time = time.perf_counter()
     final_acc = test_and_report(final_model, test_loader, device, config['classes'])
 
@@ -273,7 +296,8 @@ if __name__ == '__main__':
         "final_average_time_per_batch": float(average_time)
     })
 
-    # --- Step 7: Export to ONNX ---
+   
+    # --- Step 6: Export to ONNX ---
     print("\n--- Exporting final model to ONNX ---")
     onnx_base_path = config['model_path_pruned_finetuned'].replace(".pth", "")
     onnx_path = f"{onnx_base_path}_{config['quantization']}.onnx"

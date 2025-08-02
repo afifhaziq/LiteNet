@@ -100,31 +100,44 @@ class LiteNetLarge(LiteNet):
     A larger variant of LiteNet that supports variable input sequence length.
     Uses AdaptiveAvgPool1d(4) to allow variable input size and dynamically initializes fc1.
     """
-    def __init__(self, sequence, features, num_class):
-        super().__init__(sequence, features, num_class)
+    def __init__(self, sequence, features, num_class, vocab_size=None, embedding_dim=None):
+        super().__init__(sequence, features, num_class, vocab_size, embedding_dim)
         print(f"Initializing LiteNetLarge with sequence={sequence}, features={features}")
-        # Override global_pool to use adaptive pooling
-        self.global_pool = nn.AdaptiveAvgPool1d(4)
-        # Defer fc1 initialization
-        self.fc1 = None
 
-    def _init_fc1(self, pool_out):
-        in_features = pool_out.shape[1] * pool_out.shape[2]
-        self.fc1 = nn.Linear(in_features, 128).to(pool_out.device)
+        # The number of channels from the concatenated inception branches is 64
+        total_conv_out_channels = 64
+        pooled_seq_length = 4
+        
+        self.global_pool = nn.AdaptiveAvgPool1d(pooled_seq_length)
+        
+        fc1_in_features = total_conv_out_channels * pooled_seq_length
+        self.fc1 = nn.Linear(fc1_in_features, 128)
 
     def forward(self, x):
-        x = x.view(-1, self.sequence, self.features)
+        #print(f"Input shape at epoch start: {x.shape}")
+        if self.embedding:
+            # Squeeze is not needed if input is already 2D for embedding indices
+            if x.dim() > 2:
+                x = x.squeeze(1)
+            x = self.embedding(x.long())  # -> (batch_size, seq_len, embedding_dim)
+            x = x.permute(0, 2, 1) # -> (batch_size, embedding_dim, seq_len)
+        else:
+            # Reshape flat features into a sequence
+            x = x.view(-1, self.sequence, self.features)
+            # Permute to (batch_size, features, sequence) for Conv1d
+            x = x.permute(0, 2, 1)
+
         branch1x1 = self.branch1x1(x)
         branch3x3 = self.branch3x3(x)
         branch5x5 = self.branch5x5(x)
         branch_pool = self.branch_pool(x)
+        
         conv_out = torch.cat([branch1x1, branch3x3, branch5x5, branch_pool], 1)
+        
         pool_out = self.global_pool(conv_out)
-    
         pool_out_flat = pool_out.flatten(start_dim=1)
-       
-        if self.fc1 is None:
-            self._init_fc1(pool_out)
+        
+        
         fc1_out = self.activation5(self.fc1(pool_out_flat))
         fc2_out = self.activation6(self.fc2(fc1_out))
         out = self.fc3(fc2_out)

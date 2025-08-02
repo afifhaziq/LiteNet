@@ -5,62 +5,40 @@ import yaml
 import argparse
 import os
 import gc
+import re
+import random
 from data_processing import preprocess_data
-from model import LiteNet, LiteNetLarge
+from model import LiteNetLarge
 from train import train_model
 import wandb
-import re
+from torchinfo import summary
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
-def train_full_model(config):
-    """
-    Trains a model on all available features.
-    """
-    print("--- Mode: Training Full Model ---")
-    
-    # --- Load Configuration ---
-    dataset_name = config['dataset_name']
-    batch_size = config['batch_size']
-    epochs = config['epochs']
-    learning_rate = config['learning_rate']
-    num_features = config['num_features']
-    sequence = 1 # Use sequence=1 for full feature training
-    project_name = "Inception-" + re.sub(r'[\\/\#\?%:]', '_', str(dataset_name))
-    wandb.init(project=project_name, tags=[str(num_features)], mode="disabled")
-    # --- Initialize Model ---
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = LiteNetLarge(sequence=37, features=20, num_class=config.get('num_class', 10)).to(device)
-    model_path = f"saved_dict/LiteNet_{dataset_name}_large.pth"
+def seed_everything(seed: int) -> None:
+    """Sets the seed for reproducibility."""
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
-    # --- Load Data and Train ---
-    print("Loading dataset for training...")
-    train_data = np.load(f"dataset/{dataset_name}/train.npy")
-    test_data = np.load(f"dataset/{dataset_name}/test.npy")
-    val_data = np.load(f"dataset/{dataset_name}/val.npy")
-    
+def get_dataset_info(config, dataset_name):
+    """Reads dataset-specific information from the config."""
+    try:
+        dataset_config = config['datasets'][dataset_name]
+        classes = tuple(dataset_config['classes'])
+        num_class = dataset_config['num_class']
+        
+        if len(classes) != num_class:
+            print(f"Warning: Number of classes in config ({len(classes)}) does not match num_class ({num_class}) for {dataset_name}.")
+            
+        return classes, num_class
+    except KeyError:
+        print(f"Error: Configuration for dataset '{dataset_name}' not found in config.yaml.")
+        exit()
 
-    
-    # num_model_features = 36 * 20
-    # train_data = np.concatenate((train_data[:, :num_model_features], train_data[:, -1:]), axis=1)
-    # test_data = np.concatenate((test_data[:, :num_model_features], test_data[:, -1:]), axis=1)
-    # val_data = np.concatenate((val_data[:, :num_model_features], val_data[:, -1:]), axis=1)
-
-    train_loader, _, val_loader, _, _ = preprocess_data(
-        train_data, test_data, val_data, [], batch_size, dataset_name
-    )
-
-    criterion = torch.nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    
-    train_model(model, train_loader, val_loader, device, criterion, optimizer, epochs, dataset_name, True)
-    print("Training complete. Model saved.")
-    
-    print("Clearing training data from memory...")
-    del train_data, test_data, val_data, train_loader, val_loader
-    gc.collect()
-    
-    return model, model_path
-
-def calculate_shap_importance(model, model_path, config):
+def calculate_shap_importance(model, model_path, config, device):
     """
     Calculates and saves feature importance using SHAP on a given model.
     """
@@ -68,24 +46,29 @@ def calculate_shap_importance(model, model_path, config):
     
     # --- Load Configuration ---
     dataset_name = config['dataset_name']
-    num_features = config['num_features']
-    sequence = 1
     
     # --- Load Model ---
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.load_state_dict(torch.load(model_path))
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
     model.eval()
 
     # --- Load Data for SHAP ---
     print("Loading training data for SHAP analysis...")
-    train_data_npy = np.load(f"dataset/{dataset_name}/train.npy", allow_pickle=True)
-    train_data_npy = train_data_npy[:1000]
+    # Use 1000 samples
+    # More data is better, but it takes a long time to calculate.
+    train_data_npy = np.load(f"dataset/{dataset_name}/train.npy")[:1000]
 
-    train_data_npy[:, [12,13,14,15,16,17,18,19]] = 0 # IP Masking
-    
-    # Trim features to match model dimensions (36 * 20 = 720 features)
-    num_model_features = 36 * 20
+    # IP Masking (if necessary for the dataset)
+    # train_data_npy[:, [12,13,14,15,16,17,18,19]] = 0 
+
+    # The LiteNetLarge model expects a certain number of features.
+    num_model_features = config['sequence'] * config['features']
     x_train_full = train_data_npy[:, :-1]
+    
+    # Ensure data matches model's expected input features
+    if x_train_full.shape[1] < num_model_features:
+        raise ValueError(f"Input data has {x_train_full.shape[1]} features, but model expects {num_model_features}")
+    
     x_train_trimmed = x_train_full[:, :num_model_features]
     x_train = torch.from_numpy(x_train_trimmed.astype(np.float32))
 
@@ -96,47 +79,124 @@ def calculate_shap_importance(model, model_path, config):
     print("Calculating SHAP values... (This may take a while)")
     shap_values = explainer.shap_values(background)
 
-    # Calculate the mean of the absolute values of the SHAP values across all classes and background samples output size will be 740 (features size)
-    shap_values = np.abs(shap_values).mean(axis=2).mean(axis=0)
+    # shap_values is a list of arrays (one for each class)
+    # We take the absolute values and average over all classes and samples
+    mean_abs_shap = np.abs(shap_values).mean(axis=0).mean(axis=0)
 
-    # Sort the indices to get the top 20 most important features in ascending order of index value (0-739)
-    most_important_indices = np.sort(np.argsort(shap_values)[::-1][:20])
+    # Get the indices of the top 20 features
+    most_important_indices = np.argsort(mean_abs_shap)[::-1][:20]
+    
     
     output_filename = f"top_features_{dataset_name}.npy"
     np.save(output_filename, most_important_indices)
     
     print(f"Feature importance list saved to: {output_filename}")
-    print("Top 20 most important feature indices:")
-    print(most_important_indices)
+    print("Top 20 most important feature indices (sorted):")
+    print(np.sort(most_important_indices))
 
-def main():
-    """Main function to drive the script."""
-    parser = argparse.ArgumentParser(description="Feature Selection using SHAP")
-    parser.add_argument('--mode', type=str, required=True, choices=['tr', 'fs'], help="Operation mode (tr: train and select, fs: feature select only)")
-    parser.add_argument('--dataset_name', type=str, required=True, help='Dataset folder name (e.g., ISCXVPN2016)')
-    args = parser.parse_args()
+def feature_selection_pipeline(config):
+    """Orchestrates the model training and feature selection pipeline."""
+    seed_everything(134)
 
-    with open('config.yaml', 'r') as f:
-        config = yaml.safe_load(f)
-    config['dataset_name'] = args.dataset_name
-
+    # --- Configuration ---
+    dataset_name = config['dataset_name']
+    sequence = config['sequence']
+    features = config['features']
+    num_total_features = sequence * features
     
+    project_name = "LiteNet-FeatureSelection-" + re.sub(r'[\\/\#\?%:]', '_', str(dataset_name))
+    wandb.init(project=project_name, tags=[str(num_total_features)], config=config, mode="disabled")
 
-    if args.mode == 'tr':
-        model, model_path = train_full_model(config)
-        calculate_shap_importance(model, model_path, config)
+    # --- Load Data ---
+    data_path = f"dataset/{dataset_name}"
+    train_data = np.load(f"{data_path}/train.npy")
+    test_data = np.load(f"{data_path}/test.npy")
+    val_data = np.load(f"{data_path}/val.npy")
+    print('Data loaded')
+
+    print('Preprocessing data for full-feature model...')
+    # Pass empty list for features to use all available features
+    train_loader, _, val_loader, _, _ = preprocess_data(
+        train_data, test_data, val_data, [], config['batch_size'], dataset_name
+    )
+
+    # --- Model Setup ---
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = LiteNetLarge(
+        sequence=sequence, 
+        features=features, 
+        num_class=config['num_class'],
+        vocab_size=256, 
+        embedding_dim=24).to(device)
     
-    elif args.mode == 'fs':
+    model_path = config['model_path']
+    print(f"Using model path: {model_path}")
 
-        model_path = f"saved_dict/LiteNet_{config['dataset_name']}_large.pth" 
+    summary(model, input_size=(config['batch_size'], sequence*features), device=device)
+
+    criterion = torch.nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=1e-2)
+    scheduler = ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=3)
+
+    # --- Execution ---
+    if config['mode'] == 'tr':
+        print("--- Running in Training & Feature Selection Mode ---")
+        train_model(model, train_loader, val_loader, device, criterion, optimizer, scheduler, config['epochs'], model_path)
+        print("Training complete. Starting SHAP analysis.")
+        calculate_shap_importance(model, model_path, config, device)
+    
+    elif config['mode'] == 'fs':
+        print("--- Running in Feature Selection Only Mode ---")
         if not os.path.exists(model_path):
-            print(f"Error: Model not found at {model_path}. Please run with '--mode tr' first.")
+            print(f"Error: Model not found at {model_path}. Please run with '--mode tr' first to train the model.")
             return
+        print(f"Loading existing model from: {model_path}")
+        calculate_shap_importance(model, model_path, config, device)
         
-        print(f"Using existing model from: {model_path}")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model = LiteNet(sequence=36, features=20, num_class=config.get('num_class', 10)).to(device)
-        calculate_shap_importance(model, model_path, config)
+    print("Clearing data from memory...")
+    del train_data, test_data, val_data, train_loader, val_loader
+    gc.collect()
 
 if __name__ == "__main__":
-    main() 
+    parser = argparse.ArgumentParser(description="Feature Selection using SHAP")
+    parser.add_argument('--data', type=str, required=True, help='Name of the dataset folder in ./dataset/')
+    parser.add_argument('--mode', type=str, required=True, choices=['tr', 'fs'], help="Operation mode (tr: train and select, fs: feature select only)")
+    parser.add_argument('--path', type=str, default=None, help='Path to model. Overrides default path generation.')
+    args = parser.parse_args()
+
+    # --- Load Base Config ---
+    with open('config.yaml', 'r') as f:
+        config = yaml.safe_load(f)
+
+    # --- Override Config with CLI Args ---
+    config['dataset_name'] = args.data
+    config['mode'] = args.mode
+
+    # --- Determine model path ---
+    if args.path:
+        # If it's a full path, use it. If it's just a filename, assume it's in saved_dict/
+        if '/' in args.path or '\\' in args.path:
+            config['model_path'] = args.path
+        else:
+            config['model_path'] = f"saved_dict/{args.path}"
+    else:
+        # Default path for the large model used for feature selection
+        config['model_path'] = f"saved_dict/LiteNet_{config['dataset_name']}_large.pth"
+
+    # --- Dynamically Set Config Values ---
+    classes, num_class = get_dataset_info(config, config['dataset_name'])
+    config['num_class'] = num_class
+    config['classes'] = classes
+    
+    # For feature selection, we use the 'large' model parameters from the top level of the config
+    if 'large_model' in config:
+        large_model_config = config['large_model']
+        config['sequence'] = large_model_config['sequence']
+        config['features'] = large_model_config['features']
+    else:
+        print(f"Warning: 'large_model' configuration not found in config.yaml. Using default values.")
+        # Default values
+        config['sequence'] = 37 
+        config['features'] = 20  
+
+    feature_selection_pipeline(config) 

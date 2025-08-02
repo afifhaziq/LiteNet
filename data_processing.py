@@ -20,8 +20,8 @@ def preprocess_data(train, test, val, most_important_list, batch_size, data):
     x_val, y_val = val[:, :-1], val[:, -1]
 
     # Perform feature selection if a list is provided
-    if most_important_list.size > 0:
-        print(f'Selecting {most_important_list.shape[0]} important features based on list...')
+    if len(most_important_list) > 0:
+        print(f'Selecting {len(most_important_list)} important features based on list...')
         x_train = x_train[:, most_important_list]
         x_test = x_test[:, most_important_list]
         x_val = x_val[:, most_important_list]

@@ -19,7 +19,7 @@ def train_model(model, train_loader, val_loader, device, criterion, optimizer, s
         train_loss = 0
         for samples, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epoch}"):
             samples, labels = samples.to(device), labels.to(device)
-
+            
             optimizer.zero_grad()
             predictions = model(samples)
             loss = criterion(predictions, labels)

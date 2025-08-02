@@ -10,9 +10,13 @@ test_mode: false
 fine_tune_epochs: 30
 fine_tune_lr: 0.003
 
-# --- Dataset Specific Settings ---
-# Default dataset to use if not specified by a command-line argument
-active_dataset: ISCXVPN2016
+#active_dataset: ISCXVPN2016
+
+# Set dependent on the input feature size.
+# Sequence*features should be same as the input feature size
+large_model:
+  sequence: 37
+  features: 20
 
 datasets:
   ISCXVPN2016:

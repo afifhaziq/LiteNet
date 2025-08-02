@@ -32,7 +32,7 @@ You can use the following command to install all prerequisites via Conda:
 conda env create -f environment.yml
 ```
 
-Alternatively, you can use pip with the provided `requirements.txt`:
+Alternatively, you can use pip with the provided (KIV) `requirements.txt`:
 
 ```bash
 pip install -r requirements.txt
@@ -41,13 +41,14 @@ pip install -r requirements.txt
 ### Dataset Setup
 
 This project does not include the dataset files directly. You must download them and place them in the `dataset/` directory.
-ISCXVPN2016 is available via: http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/
-Malaya-GT is available via: TBA
+
+- **ISCXVPN2016** is available at: [http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/](http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/)
+- **Malaya-GT** is available via: TBA
 
 The expected structure is:
 
 ```
-ntc_inception/
+LiteNet/
 ├── dataset/
 │   ├── ISCXVPN2016/
 │   │   ├── train.npy
@@ -173,6 +174,7 @@ FEATURES=20
 trtexec --onnx=${ONNX_MODEL_PATH} \
         --saveEngine=${TRT_ENGINE_PATH} \
  	--sparsity=enable \
+        --useCudaGraph \
  	--shapes=${INPUT_NAME}:${BATCH_SIZE}x${FEATURES} \
 	--fp16
 ```

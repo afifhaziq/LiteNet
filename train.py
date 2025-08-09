@@ -7,7 +7,16 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 from torch import amp
 
 
-def train_model(model, train_loader, val_loader, device, criterion, optimizer, scheduler, num_epoch, model_path):
+def apply_sparsity_masks(model, masks):
+    """Apply sparsity masks to maintain pruned weights as zero."""
+    import torch.nn as nn
+    for name, module in model.named_modules():
+        if name in masks:
+            with torch.no_grad():
+                module.weight.data *= masks[name]
+
+
+def train_model(model, train_loader, val_loader, device, criterion, optimizer, scheduler, num_epoch, model_path, sparsity_masks=None):
     
     best_val_loss = float('inf')
     wandb.watch(model, log='all', log_graph=True)
@@ -24,7 +33,17 @@ def train_model(model, train_loader, val_loader, device, criterion, optimizer, s
             predictions = model(samples)
             loss = criterion(predictions, labels)
             loss.backward()
+            
+            # Apply sparsity masks if provided (before optimizer step)
+            if sparsity_masks is not None:
+                apply_sparsity_masks(model, sparsity_masks)
+            
             optimizer.step()
+            
+            # Apply sparsity masks if provided (after optimizer step)
+            if sparsity_masks is not None:
+                apply_sparsity_masks(model, sparsity_masks)
+            
             train_loss += loss.item()
 
         train_loss /= len(train_loader)

@@ -112,6 +112,15 @@ def prune_model(model):
     return model
 
 
+def create_sparsity_masks(model):
+    """Create masks to preserve the current sparsity pattern."""
+    masks = {}
+    for name, module in model.named_modules():
+        if isinstance(module, (nn.Linear, nn.Conv1d)):
+            # Create mask: 1 for non-zero weights, 0 for zero weights
+            masks[name] = (module.weight.data != 0).float()
+            print(f"  Created sparsity mask for {name}: {torch.sum(masks[name]).item()}/{masks[name].numel()} non-zero")
+    return masks
 
 
 def count_nonzero_params(model):
@@ -237,8 +246,12 @@ if __name__ == '__main__':
 
         pruned_model = prune_model(copy.deepcopy(model))
         pruned_model = pruned_model.to(device)
+        
+        # Create sparsity masks to preserve zero weights during fine-tuning
+        print("\n--- Creating sparsity masks ---")
+        sparsity_masks = create_sparsity_masks(pruned_model)
 
-        # Reusing train_model for fine-tuning
+        # Reusing train_model for fine-tuning with sparsity preservation
         print(f"\n--- Starting Fine-Tuning for {config['fine_tune_epochs']} epochs with LR: {config['fine_tune_lr']} ---")
         optimizer = optim.AdamW(pruned_model.parameters(), lr=config['fine_tune_lr'], weight_decay=1e-2)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=3) #best patience=5
@@ -253,7 +266,8 @@ if __name__ == '__main__':
             optimizer=optimizer,
             scheduler=scheduler,
             num_epoch=config['fine_tune_epochs'], 
-            model_path=config['model_path_pruned_finetuned']
+            model_path=config['model_path_pruned_finetuned'],
+            sparsity_masks=sparsity_masks  # Pass the sparsity masks
         )
     else:
         print("\n--- Running in Quantize-Only Mode: Skipping Pruning and Fine-Tuning ---")

@@ -10,7 +10,7 @@ from torch import amp
 def train_model(model, train_loader, val_loader, device, criterion, optimizer, scheduler, num_epoch, model_path):
     
     best_val_loss = float('inf')
-    wandb.watch(model, log='all')
+    wandb.watch(model, log='all', log_graph=True)
     
     model.train()
     start_time = time.perf_counter()

@@ -84,7 +84,7 @@ def training_model_pipeline(config):
     model_path = config['model_path']
     print(f"Using model path: {model_path}")
 
-    summary(model, input_size=(config['batch_size'], sequence, features), device=device)
+    summary(model, input_size=(config['batch_size'], features), device=device)
 
     criterion = torch.nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=1e-2)

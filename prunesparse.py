@@ -1,25 +1,19 @@
 import torch
 import torch.nn as nn
-import torch.nn.utils.prune as prune
 import torch.optim as optim
-import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from model import LiteNet, QuantizedLiteNet
 from data_processing import preprocess_data
-from train import get_time, evaluate_model, train_model, test_and_report
+from train import get_time, train_model, test_and_report
 import time
 import wandb
-from sklearn.metrics import classification_report, confusion_matrix
 import random
 import argparse
 import copy
 import yaml
-from sklearn import metrics
 from ptflops import get_model_complexity_info
 import gc
 import torch.ao.quantization
-from tqdm import tqdm
 from quantize import quantize_fp16, quantize_int8_static
 
 # --- 1. Utility Functions ---
@@ -73,25 +67,51 @@ def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
     return pruned_flat_tensor.view(original_shape)
 
 
+def apply_2_4_sparsity_to_conv1d_weight(weight: torch.Tensor) -> torch.Tensor:
+    """
+    Applies 2:4 sparsity to a Conv1d weight tensor along its GEMM inner dimension
+    (in_channels * kernel_size) for each output channel.
+
+    Expected Conv1d weight shape: (out_channels, in_channels, kernel_size)
+    """
+    if weight.dim() != 3:
+        return weight
+
+    out_channels, in_channels, kernel_size = weight.shape
+    # Flatten to 2D so that the last dimension corresponds to the GEMM K dimension
+    weight_2d = weight.view(out_channels, in_channels * kernel_size).contiguous()
+    pruned_2d = apply_2_4_sparsity_to_tensor(weight_2d)
+    return pruned_2d.view_as(weight)
+
+
 def prune_model(model):
-    print("\n--- Applying 2:4 sparsity only to Linear layers ---")
-    
+    print("\n--- Applying 2:4 sparsity to Linear layers and Conv1d inception branches ---")
+
     for name, module in model.named_modules():
         if isinstance(module, torch.nn.Linear):
             with torch.no_grad():
                 module.weight.data = apply_2_4_sparsity_to_tensor(module.weight.data)
-            print(f"  Applied 2:4 sparsity to {name} (Linear layer)")
-            
-            # Optional: Log sparsity per layer
             total_elements = module.weight.numel()
             nonzero_elements = torch.count_nonzero(module.weight.data).item()
             current_sparsity = 1.0 - (nonzero_elements / total_elements)
-            print(f"    Sparsity for {name}: {current_sparsity:.2%}")
+            print(f"  Applied 2:4 sparsity to {name} (Linear) | Sparsity: {current_sparsity:.2%}")
             wandb.log({f"sparsity_layer/{name}": current_sparsity})
-        
-            
+        elif isinstance(module, nn.Conv1d) and name.startswith((
+            "branch1x1", "branch3x3", "branch5x5", "branch_pool"
+        )):
+            with torch.no_grad():
+                pruned_w = apply_2_4_sparsity_to_conv1d_weight(module.weight.data)
+                module.weight.data.copy_(pruned_w)
+            total_elements = module.weight.numel()
+            nonzero_elements = torch.count_nonzero(module.weight.data).item()
+            current_sparsity = 1.0 - (nonzero_elements / total_elements)
+            print(f"  Applied 2:4 sparsity to {name} (Conv1d) | Sparsity: {current_sparsity:.2%}")
+            wandb.log({f"sparsity_layer/{name}": current_sparsity})
+
     print("--- Model pruning complete ---")
     return model
+
+
 
 
 def count_nonzero_params(model):
@@ -137,7 +157,7 @@ if __name__ == '__main__':
 
     # --- Set derived config values ---
     # Define the output path for the pruned and fine-tuned model
-    config['model_path_pruned_finetuned'] = f"saved_dict/LiteNet_{dataset_name}_pruned_finetuned_embedding.pth"
+    config['model_path_pruned_finetuned'] = f"saved_dict/LiteNet_{dataset_name}_FullPruned_finetuned_embedding.pth"
 
     # Determine the correct input model path based on flags
     if args.quantize_only:
@@ -165,7 +185,7 @@ if __name__ == '__main__':
 
     # --- WANDB Initialization ---
     seed_everything(config['seed'])
-    wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="disabled", tags=[f"2:4_Linear_{config['quantization']}"])
+    wandb.init(project="LiteNet-" + dataset_name + "_prune_finetune", mode="online", tags=[f"2:4_Linear_{config['quantization']}"])
     wandb.config.update(config)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -47,7 +47,7 @@ gc.collect()
 
 
 # Path to your ONNX model file
-onnx_model_path = f'saved_dict/LiteNet_{data}_pruned_finetuned_embedding_INT8.onnx' # Make sure this is the correct path to your exported ONNX model
+onnx_model_path = f'saved_dict/LiteNet_{data}_FullPruned_finetuned_embedding_FP16.onnx' # Make sure this is the correct path to your exported ONNX model
 
 # Load your ONNX model
 onnx_session = ort.InferenceSession(onnx_model_path, providers=['CUDAExecutionProvider'])
@@ -63,7 +63,7 @@ total = 0
 for images, labels in test_loader:
     # IMPORTANT: Ensure your preprocessing is identical to PyTorch's
     # The input numpy array must be in the correct format (e.g., NCHW) and type (e.g., np.float32)
-    input_data = images.numpy().astype(np.int8)
+    input_data = images.numpy().astype(np.float16)
 
     # Run inference
     result = onnx_session.run([output_name], {input_name: input_data})[0]

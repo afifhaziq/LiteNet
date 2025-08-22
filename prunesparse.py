@@ -41,12 +41,13 @@ def apply_2_4_sparsity_to_tensor(tensor: torch.Tensor) -> torch.Tensor:
     original_shape = tensor.shape
 
     # Flatten the tensor into rows and columns (rows = Inputs, columns = Outputs)
-    # So it becomes a matrix of shape (num_rows, num_cols) with rows representing the weight tensor's inputs and columns representing the weight tensor's outputs
+    # So it becomes a matrix of shape (num_rows, num_cols)
+    # rows represent the weight tensor's inputs and columns represent the weight tensor's outputs
     num_rows = int(np.prod(original_shape[:-1]))
     num_cols = original_shape[-1]
     
     flat_tensor = tensor.view(num_rows, num_cols).contiguous()
-    pruned_flat_tensor = torch.zeros_like(flat_tensor, device=tensor.device) # Ensure tensor is on correct device
+    pruned_flat_tensor = torch.zeros_like(flat_tensor, device=tensor.device)
 
     block_size = 4
     for r in range(num_rows):

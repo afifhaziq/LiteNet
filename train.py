@@ -9,7 +9,6 @@ from torch import amp
 
 def apply_sparsity_masks(model, masks):
     """Apply sparsity masks to maintain pruned weights as zero."""
-    import torch.nn as nn
     for name, module in model.named_modules():
         if name in masks:
             with torch.no_grad():
@@ -34,13 +33,13 @@ def train_model(model, train_loader, val_loader, device, criterion, optimizer, s
             loss = criterion(predictions, labels)
             loss.backward()
             
-            # Apply sparsity masks if provided (before optimizer step)
+            # Apply sparsity masks before optimizer step
             if sparsity_masks is not None:
                 apply_sparsity_masks(model, sparsity_masks)
             
             optimizer.step()
             
-            # Apply sparsity masks if provided (after optimizer step)
+            # Reinforce the sparsity masks
             if sparsity_masks is not None:
                 apply_sparsity_masks(model, sparsity_masks)
             

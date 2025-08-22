@@ -2,6 +2,24 @@
 
 This project provides a complete, end-to-end pipeline for training, optimizing, and deploying a neural network for LiteNet, a Network Traffic Classification (NTC) model. The pipeline includes feature selection with SHAP, semi-structured sparse pruning, quantization (FP16/INT8), and conversion to a TensorRT engine for high-performance inference.
 
+## Architecture and Compression Techniques
+
+### LiteNet Architecture
+
+![LiteNet Architecture](Figure/architecture.png)
+
+The LiteNet architecture is designed for efficient network traffic classification with a lightweight structure optimized for deployment on resource-constrained devices.
+
+### Compression Techniques
+
+![Compression Techniques](Figure/compressiontechniques.png)
+
+The project implements various compression techniques including:
+
+- **2:4 Semi-structured Sparsity**: Reduces model parameters while maintaining performance
+- **Quantization**: FP16 and INT8 precision for reduced memory footprint and faster inference
+- **TensorRT Optimization**: GPU-optimized inference engine for maximum performance
+
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)
@@ -55,6 +73,7 @@ LiteNet/
 │   │   ├── train.npy
 │   │   ├── test.npy
 │   │   └── val.npy
+├── saved_dict/
 ```
 
 ## Project Pipeline
@@ -67,23 +86,6 @@ The project follows these main steps:
 4.  **Optimization (`prunesparse.py`)**: Applies 2:4 semi-structured pruning, fine-tunes, and quantizes the model, exporting to ONNX.
 5.  **TensorRT Conversion**: The optimized ONNX model is converted into a TensorRT engine.
 6.  **Inference (`tensorrtinference.py`)**: The final TensorRT engine is used for high-performance inference and benchmarking.
-
-## Architecture and Compression Techniques
-
-### LiteNet Architecture
-
-![LiteNet Architecture](Figure/architecture.png)
-
-The LiteNet architecture is designed for efficient network traffic classification with a lightweight structure optimized for deployment on resource-constrained devices.
-
-### Compression Techniques
-
-![Compression Techniques](Figure/compressiontechniques.png)
-
-The project implements various compression techniques including:
-- **2:4 Semi-structured Sparsity**: Reduces model parameters while maintaining performance
-- **Quantization**: FP16 and INT8 precision for reduced memory footprint and faster inference
-- **TensorRT Optimization**: GPU-optimized inference engine for maximum performance
 
 ## How to Use
 

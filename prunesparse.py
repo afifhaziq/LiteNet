@@ -255,7 +255,8 @@ if __name__ == '__main__':
         # Reusing train_model for fine-tuning with sparsity preservation
         print(f"\n--- Starting Fine-Tuning for {config['fine_tune_epochs']} epochs with LR: {config['fine_tune_lr']} ---")
         optimizer = optim.AdamW(pruned_model.parameters(), lr=config['fine_tune_lr'], weight_decay=1e-2)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=3) #best patience=5
+        #optimizer = optim.Adam(pruned_model.parameters(), lr=config['fine_tune_lr'])
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.1, patience=3) 
         criterion = nn.CrossEntropyLoss()
         
         train_model(

@@ -61,8 +61,8 @@ pip install -r requirements.txt
 
 This project does not include the dataset files directly. You must download them and place them in the `dataset/` directory.
 
-- **ISCXVPN2016** is available at: [http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/](http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/)
-- **Malaya-GT** is available via: TBA
+- **ISCXVPN2016** is available at: [ISCXVPN2016](http://cicresearch.ca/CICDataset/ISCX-VPN-NonVPN-2016/)
+- **MalayaNetwork_GT** is available via: [MalayaNetwork_GT](https://doi.org/10.5281/zenodo.17282449)
 
 The expected structure is:
 

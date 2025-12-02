@@ -3,7 +3,7 @@ seed: 134
 sequence: 1
 features: 20
 batch_size: 64
-epochs: 60
+epochs: 1
 learning_rate: 0.003
 num_class: 10
 test_mode: false

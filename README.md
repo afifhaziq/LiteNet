@@ -45,16 +45,21 @@ Virtual Environment setup for High-resource environment
 - NVIDIA TensorRT 10.10.0.31
 - Wandb 0.19.7 (Optional but recommended. For logging purposes)
 
-You can use the following command to install all prerequisites via Conda:
+You can use the following command to install all prerequisites via uv:
+
+```bash
+uv sync
+```
+**Note:**
+If you sync the env using uv, run using the following command. This is just an example change accordingly based on file:
+```bash
+uv run main.py
+```
+
+else, you can use the following command to install all prerequisites via Conda:
 
 ```bash
 conda env create -f environment.yml
-```
-
-Alternatively, you can use pip with the provided (KIV) `requirements.txt`:
-
-```bash
-pip install -r requirements.txt
 ```
 
 ### Dataset Setup
@@ -218,3 +223,15 @@ To benchmark an `FP16` engine for the `ISCXVPN2016` dataset:
 ```bash
 python tensorrtinference.py --data ISCXVPN2016 --quantization FP16
 ```
+
+## LICENSE
+
+MIT License
+
+Copyright (c) 2025 afifhaziq
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.

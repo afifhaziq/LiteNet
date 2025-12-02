@@ -70,7 +70,7 @@ def calculate_shap_importance(model, model_path, config, device):
         raise ValueError(f"Input data has {x_train_full.shape[1]} features, but model expects {num_model_features}")
     
     x_train_trimmed = x_train_full[:, :num_model_features]
-    x_train = torch.from_numpy(x_train_trimmed.astype(np.float32))
+    x_train = torch.from_numpy(x_train_trimmed.astype(np.int64)).long()
 
     # --- Run SHAP Analysis ---
     background = x_train.to(device)

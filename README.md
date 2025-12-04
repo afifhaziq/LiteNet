@@ -2,6 +2,7 @@
 
 This project provides a complete, end-to-end pipeline for training, optimizing, and deploying a neural network for LiteNet, a Network Traffic Classification (NTC) model. The pipeline includes feature selection with SHAP, semi-structured sparse pruning, quantization (FP16/INT8), and conversion to a TensorRT engine for high-performance inference.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/afifhaziq/LiteNet)
 ## Architecture and Compression Techniques
 
 ### LiteNet Architecture
